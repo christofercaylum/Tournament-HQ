@@ -185,7 +185,7 @@ let directoryView='teams';let directoryQuery='';let directorySelectedId='';
 let connectionState={loaded:false,loading:false,version:0,items:[],error:''};
 let jfPreview={formId:'',rows:[],error:'',loading:false};
 
-// V8.5.2 RC2: director-initiated Jotform preview and confirmed directory import.
+// V8.5.2 RC3: director-initiated Jotform preview and confirmed directory import.
 function jotformId(link){
  try{const u=new URL(String(link||'').trim());if(u.protocol!=='https:'||!['form.jotform.com','www.jotform.com','jotform.com'].includes(u.hostname))return '';
  const parts=u.pathname.split('/').filter(Boolean);const id=parts.find(p=>/^\d{10,22}$/.test(p));return id||'';
@@ -204,7 +204,8 @@ async function jotformPreview(index){
  const selected=connectionState.items[index];if(!selected)return;
  jfPreview={formId:selected.formId,rows:[],error:'',loading:true};render();
  try{
-  if(!rosterState.loaded)await rosterLoad();
+  await rosterLoad();
+  if(rosterState.error)throw Error("Directory refresh failed: "+rosterState.error);
   const {data,error}=await client.functions.invoke('hq-jotform-import',{body:{formId:selected.formId}});
   if(error)throw error;
   if(data?.error)throw Error(data.error);
@@ -219,13 +220,22 @@ function jotformDecision(row){
  const email=(row.email||'').toLowerCase().trim();
  if(email && rosterState.players.some(p=>(p.email||'').toLowerCase().trim()===email))return 'review';
  if(rosterState.players.some(p=>(p.name||'').toLowerCase().trim()===row.name.toLowerCase().trim()))return 'review';
+ // Multiple waiver submissions by the same person should not stop all other imports.
+ // Keep the earliest occurrence selectable; hold subsequent duplicates for review.
+ const position=jfPreview.rows.indexOf(row);
+ const name=String(row.name||'').trim().toLowerCase();
+ if(jfPreview.rows.slice(0,Math.max(0,position)).some(previous=>{
+  const previousEmail=String(previous.email||'').trim().toLowerCase();
+  const previousName=String(previous.name||'').trim().toLowerCase();
+  return (email&&email===previousEmail)||(name&&name===previousName);
+ }))return 'duplicate';
  return 'new';
 }
 async function jotformCommit(){
  const rows=jfPreview.rows.filter(r=>jotformDecision(r)==='new'&&document.querySelector('[data-jf-check="'+r.submissionId+'"]')?.checked);
  if(!rows.length){alert('Select at least one new player. Existing and uncertain matches require manual review.');return}
  const unique=[];const emails=new Set(),names=new Set();for(const r of rows){const email=(r.email||'').toLowerCase().trim(),name=r.name.toLowerCase().trim();if((email&&emails.has(email))||names.has(name))continue;if(email)emails.add(email);names.add(name);unique.push(r)}
- if(unique.length!==rows.length){alert('Some selected submissions have matching names or emails. Resolve those manually before import.');return}
+ if(unique.length!==rows.length){alert('Duplicate submissions detected in this selection. Refresh the preview to review them. Nothing was imported.');return}
  if(!confirm('Import '+rows.length+' new player(s) into the private directory? No team assignments, marketing consent, or waiver verification will be recorded.'))return;
  const next=[...rosterState.players,...rows.map(r=>({id:uid(),name:r.name,email:r.email||'',phone:r.phone||'',optIn:false,jotformSources:[jfPreview.formId+':'+r.submissionId]}))];
  if(await directorySave(next,rosterState.assignments)){alert(rows.length+' new player(s) imported. Refreshing preview.');jfPreview.rows=[];tab='connections';render()}
@@ -235,8 +245,8 @@ function jfPreviewPanel(){
  if(jfPreview.loading)return '<div class="panel"><h2>Import preview</h2><p class="note">Loading Jotform submissions…</p></div>';
  if(jfPreview.error)return `<div class="panel"><h2>Import preview</h2><div class="notice bad">${esc(jfPreview.error)}</div><p class="note">Confirm the Edge Function is deployed and JOTFORM_API_KEY secret is configured.</p></div>`;
  const rows=jfPreview.rows;
- return `<div class="panel"><h2>Import preview (${rows.length} submissions)</h2><p class="note">Only new, clearly identified players can be selected. Existing matches and incomplete submissions are held for review. No waiver validity, team assignment, or marketing consent is inferred.</p>
- ${rows.map(r=>{const status=jotformDecision(r);return `<div class="tile"><label style="display:flex;align-items:center;gap:10px"><input type="checkbox" data-jf-check="${esc(r.submissionId)}" ${status==='new'?'checked':'disabled'} style="width:auto"><span><strong>${esc(r.name||'Name missing')}</strong><div class="mini">${esc(r.email||'No email')} · ${esc(r.phone||'No phone')} · ${esc(status==='new'?'New candidate':status==='imported'?'Previously imported':status==='review'?'Possible existing player — review manually':'Missing name — skipped')}</div></span></label></div>`}).join('')||'<p class="note">No submissions found in this batch.</p>'}
+ return `<div class="panel"><h2>Import preview (${rows.length} submissions)</h2><p class="note">Only new, clearly identified players can be selected. Existing matches, repeat submissions, and incomplete submissions are held for review. No waiver validity, team assignment, or marketing consent is inferred.</p>
+ ${rows.map(r=>{const status=jotformDecision(r);return `<div class="tile"><label style="display:flex;align-items:center;gap:10px"><input type="checkbox" data-jf-check="${esc(r.submissionId)}" ${status==='new'?'checked':'disabled'} style="width:auto"><span><strong>${esc(r.name||'Name missing')}</strong><div class="mini">${esc(r.email||'No email')} · ${esc(r.phone||'No phone')} · ${esc(status==='new'?'New candidate':status==='imported'?'Previously imported':status==='review'?'Possible existing player — review manually':status==='duplicate'?'Repeated submission in this preview — skipped':'Missing name — skipped')}</div></span></label></div>`}).join('')||'<p class="note">No submissions found in this batch.</p>'}
  <div class="actions"><button class="btn primary" id="jfCommit">Import selected new players</button><button class="btn" id="jfClose">Close preview</button></div></div>`;
 }
 function connectionPage(){
@@ -394,7 +404,7 @@ function nav(){
  if(!opts.some(x=>x[0]===tab))tab=opts[0][0];
  return `<nav class="tabs" aria-label="Main navigation">${opts.map(([k,n,ico])=>`<button data-tab="${k}" class="${tab===k?'selected':''}" ${tab===k?'aria-current="page"':''}><span class="navico" aria-hidden="true">${ico}</span>${n}</button>`).join('')}</nav>`;
 }
-function header(){return `<div class="top"><div class="shell" style="padding-bottom:0"><div class="toprow"><div><div class="brand"><span class="brand-mark">♛</span>${esc(S.title)}</div><div class="subtitle">SOVEREIGN SPORTS · V8.5.2 RC2 ${liveMode?'LIVE':'PRACTICE'} · ${esc(mode.toUpperCase())}</div></div><select id="modeSelect" aria-label="Switch app role" style="width:auto;min-width:112px" ${liveMode&&refSecret?'disabled':''}>${MODES.map(m=>`<option value="${m}" ${m===mode?'selected':''}>${m[0].toUpperCase()+m.slice(1)}</option>`).join('')}</select></div>${nav()}</div></div>`}
+function header(){return `<div class="top"><div class="shell" style="padding-bottom:0"><div class="toprow"><div><div class="brand"><span class="brand-mark">♛</span>${esc(S.title)}</div><div class="subtitle">SOVEREIGN SPORTS · V8.5.2 RC3 ${liveMode?'LIVE':'PRACTICE'} · ${esc(mode.toUpperCase())}</div></div><select id="modeSelect" aria-label="Switch app role" style="width:auto;min-width:112px" ${liveMode&&refSecret?'disabled':''}>${MODES.map(m=>`<option value="${m}" ${m===mode?'selected':''}>${m[0].toUpperCase()+m.slice(1)}</option>`).join('')}</select></div>${nav()}</div></div>`}
 function matchCard(m,options={}){if(m.stage==='playoff' && m.autoWinner && !m.away){return `<div class="match bye-card"><div class="row"><strong>Semifinal qualification</strong><span class="tag">BYE · ADVANCED</span></div><div class="team"><strong>${esc(team(m.autoWinner))}</strong></div><div class="mini">Earned a semifinal bye · Automatically advances to the next round. No court, official, or score required.</div></div>`}const result=winner(m),finalized=isDone(m);return `<div class="match"><div class="row"><strong style="color:var(--gold)">${esc(matchLabel(m))}</strong><span class="tag">${finalized?'Final':m.autoWinner?'Bye':'Scheduled'}</span></div><div class="team"><span>${esc(team(m.home))}</span><span class="score">${finalized?m.sets.filter(x=>x[0]>x[1]).length:'—'}</span></div><div class="team"><span>${esc(team(m.away))}</span><span class="score">${finalized?m.sets.filter(x=>x[1]>x[0]).length:'—'}</span></div><div class="mini">${finalized?esc(scoreText(m))+(result?' · Winner: '+esc(team(result)):' · Split 1–1 (no match winner)'):m.autoWinner?'Auto-advance: '+esc(team(m.autoWinner)):m.official?`Ref: ${esc(official(m.official))}`:'Referee not assigned'}${m.lineTeam?' · Lines: '+esc(team(m.lineTeam)):''}</div>${options.edit?`<div class="actions" style="margin-top:12px"><button class="btn" data-score="${esc(m.id)}">${result?'Correct Result':'Enter Result'}</button><button class="btn ghost" data-assign="${esc(m.id)}">Assign</button><button class="btn ghost" data-forfeit="${esc(m.id)}">Forfeit</button></div>`:''}${options.ref?`<button class="btn primary" style="width:100%;margin-top:12px" data-refscore="${esc(m.id)}">Report score</button>`:''}</div>`}
 function official(id){if(id.startsWith('team:'))return team(id.slice(5));return S.refs.find(x=>x.id===id)?.name||'Unassigned'}
 function home(){const issues=validate(),errors=issues.filter(x=>x.level==='error').length,completed=S.matches.filter(isDone).length;return `${S.status==='completed'?`<div class="notice good"><strong>🏆 Tournament complete.</strong> ${tournamentChampion()?`Champions: ${esc(team(tournamentChampion()))}`:'Review championship result.'} · Results preserved.</div>${championPanel()}`:tournamentChampion()?`<div class="notice good"><strong>🏆 Championship winner: ${esc(team(tournamentChampion()))}.</strong> Use Finish Tournament in Setup after confirming all score approvals. The final public display will announce the champions.</div>`:''}${clockPanel()}<div class="app-intro"><div class="app-eyebrow">DIRECTOR DASHBOARD</div><h1 class="app-heading">Your tournament, at a glance.</h1><p class="app-subheading">Everything you need in a tap.</p></div><div class="stats"><div class="stat"><strong>${S.teams.length}</strong><small>Teams</small></div><div class="stat"><strong>${S.settings.courts}</strong><small>Courts</small></div><div class="stat"><strong>${completed}/${S.matches.filter(m=>m.slot!=='BYE').length}</strong><small>Matches final</small></div><div class="stat"><strong>${pendingCount()}</strong><small>Awaiting approval</small></div></div><div class="panel"><h2>Next action</h2><p class="note">${pendingCount()?pendingCount()+' score report(s) awaiting review.':!S.matches.length?'Configure your teams and generate the schedule in Prepare.':!allPoolsDone()?'Continue pool matches and approve each submitted score.':!S.matches.some(m=>m.stage==='playoff')?'Pool results complete. Generate your playoff bracket from Matches & Scores.':tournamentChampion()?'Championship results recorded. Review and finish the event when ready.':'Continue bracket rounds and approve scores before advancing.'}</p><div class="actions"><button class="btn primary" data-tab="matches">Matches & Scores</button><button class="btn" data-tab="bracket">Bracket</button></div></div>${!liveMode?`<div class="panel"><h2>Local practice tools</h2><p class="note">Only affects data stored on this device. Live tournament cloud data is unchanged.</p><div class="quick-actions"><button class="btn primary" id="practiceStart">▶ Start Practice Tournament</button><button class="btn" id="practiceRef">✎ Try Referee Mode</button><button class="btn ghost" id="practiceReset">Reset Local Practice</button></div></div>`:``}<div class="panel"><h2>Schedule status</h2><p class="note">${errors?'There are '+errors+' critical issue(s) to resolve before publishing.':'No critical scheduling conflicts detected.'} ${issues.length-errors} additional warnings or advisories.</p><button class="btn primary" data-tab="safety">Open Safety Check →</button> <span class="tag">${esc(S.status.toUpperCase())}</span></div>${reportQueue()}<div class="panel"><h2>Up next · automatic court board</h2>${nextUp().map(x=>matchCard(x,{edit:true})).join('')||'<p class="note">Generate a match schedule to get started.</p>'}</div>`}
