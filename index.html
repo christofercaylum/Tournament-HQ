@@ -199,6 +199,7 @@ function waiverStatus(id){
  if(records.some(r=>r.signed_on<=today&&r.valid_until>=today))return 'Waiver on file';
  return records.length?'Waiver expired / not yet effective':'Waiver not verified';
 }
+function byPlayerFirstName(rows){return [...(rows||[])].sort((a,b)=>String(a.name||'').trim().localeCompare(String(b.name||'').trim(),undefined,{sensitivity:'base',numeric:true}));}
 function waiverReviewForm(submissionId){
  const form=connectionState.items.find(x=>x.formId===jfPreview.formId&&x.type==='waiver');
  const row=jfPreview.rows.find(r=>r.submissionId===submissionId);
@@ -208,7 +209,7 @@ function waiverReviewForm(submissionId){
  const existing=waiverState.records.find(r=>r.form_id===jfPreview.formId&&r.submission_id===submissionId);
  const d=document.createElement('div');d.className='modalcover';
  d.innerHTML=`<div class="modal"><h2>Review waiver submission</h2><p class="note">${esc(row.name)} · ${esc(row.email||'No email')}<br>Verify the actual signed release in Jotform before marking it verified. A submitted form does not automatically establish coverage.</p>
- <label class="field"><span>Player profile</span><select id="wrPlayer"><option value="">Select player</option>${rosterState.players.map(p=>`<option value="${esc(p.id)}" ${existing?.player_id===p.id||!existing&&candidates.length===1&&candidates[0].id===p.id?'selected':''}>${esc(p.name)} · ${esc(p.email||'No email')}</option>`).join('')}</select></label>
+ <label class="field"><span>Player profile</span><select id="wrPlayer"><option value="">Select player</option>${byPlayerFirstName(rosterState.players).map(p=>`<option value="${esc(p.id)}" ${existing?.player_id===p.id||!existing&&candidates.length===1&&candidates[0].id===p.id?'selected':''}>${esc(p.name)} · ${esc(p.email||'No email')}</option>`).join('')}</select></label>
  <label class="field"><span>Review status</span><select id="wrStatus"><option value="unverified">Not verified</option><option value="verified" ${existing?.review_status==='verified'?'selected':''}>Verified by Director</option></select></label>
  <label class="field"><span>Signed date (from Jotform)</span><input type="date" id="wrSigned" value="${esc(existing?.signed_on||'')}"></label>
  <label class="field"><span>Valid through (according to waiver policy)</span><input type="date" id="wrUntil" value="${esc(existing?.valid_until||'')}"></label>
@@ -221,7 +222,7 @@ function waiverReviewForm(submissionId){
   if(!player||!d.querySelector('#wrConfirm').checked)return alert('Select a player and confirm you reviewed the original waiver.');
   if(status==='verified'&&(!signed||!until||until<signed))return alert('A verified waiver requires valid signed and expiration dates.');
   const b=d.querySelector('#wrSave');b.disabled=true;b.textContent='Saving…';
-  try{const {error}=await client.rpc('hq_waiver_review_save',{p_form_id:jfPreview.formId,p_submission_id:submissionId,p_player_id:player,p_review_status:status,p_signed_on:signed||null,p_valid_until:until||null});if(error)throw error;d.remove();await waiverLoad();}
+  try{const {error}=await client.rpc('hq_waiver_review_save',{p_form_id:jfPreview.formId,p_submission_id:submissionId,p_player_id:player,p_review_status:status,p_signed_on:signed||null,p_valid_until:until||null});if(error)throw error;d.remove();await waiverLoad();alert(status==='verified'?'Waiver review saved successfully — marked Verified for '+(row.name||'selected participant')+'.':'Waiver review saved successfully — marked Not verified for '+(row.name||'selected participant')+'.');}
   catch(e){alert('Waiver review NOT saved: '+(e.message||String(e)));b.disabled=false;b.textContent='Save review'}
  };
 }
@@ -282,7 +283,7 @@ function teamRegLink(id){
  const chosen=players.find(p=>p.id===record.captainPlayerId)|| (candidates.length===1?candidates[0]:null);
  const team=teams.find(t=>t.id===record.competitionTeamId)||teams.find(t=>normalized(t.name)===normalized(record.teamName));
  const d=document.createElement('div');d.className='modalcover';
- const opts=players.map(p=>`<option value="${esc(p.id)}" ${chosen?.id===p.id?'selected':''}>${esc(p.name)}${p.email?' · '+esc(p.email):''}</option>`).join('');
+ const opts=byPlayerFirstName(players).map(p=>`<option value="${esc(p.id)}" ${chosen?.id===p.id?'selected':''}>${esc(p.name)}${p.email?' · '+esc(p.email):''}</option>`).join('');
  d.innerHTML=`<div class="modal"><h2>Link team registration</h2><p class="note">${esc(record.teamName)} · ${esc(record.eventKey)}. Review identity and choose an existing competition team. Nothing in the schedule changes.</p>
  <label class="field"><span>Captain profile</span><select id="trlPlayer"><option value="">Select an existing player</option>${opts}</select></label>
  <p class="note">If the captain does not have a profile, choose Create captain profile below. Being a captain does not automatically make them a playing roster member.</p>
@@ -528,7 +529,7 @@ async function registrationRosterImport(submissionId){
  const players=rosterState.players;
  const sortedPlayers=[...players].sort((a,b)=>String(a.name||'').trim().localeCompare(String(b.name||'').trim(),undefined,{sensitivity:'base',numeric:true}));
  const d=document.createElement('div');d.className='modalcover';
- const options=players.map(p=>`<option value="${esc(p.id)}">${esc(p.name)}${p.email?' · '+esc(p.email):''}</option>`).join('');
+ const options=byPlayerFirstName(players).map(p=>`<option value="${esc(p.id)}">${esc(p.name)}${p.email?' · '+esc(p.email):''}</option>`).join('');
  const block=entries.map((r,i)=>{
   const matches=players.filter(p=>norm(p.name)===norm(r.name));
   const captain=!!r.isCaptain;
@@ -610,7 +611,7 @@ function registrationManagementPage(){
   return {r,team,members,verified,missing,linked,rosterReady,waiverReady};
  });
  const ready=summaries.filter(x=>x.waiverReady&&x.r.status==='approved'&&x.linked).length;
- const cards=summaries.map(x=>{
+ const cards=[...summaries].sort((a,b)=>String(a.r.teamName||'').localeCompare(String(b.r.teamName||''),undefined,{sensitivity:'base'})).map(x=>{
   const {r,team,members,verified,missing,linked,rosterReady,waiverReady}=x;
   const issues=[];
   if(r.status!=='approved')issues.push('Registration awaiting confirmation');
@@ -693,7 +694,7 @@ function activeAssignments(){return (rosterState.assignments||[]).filter(a=>a.ev
 function directorySuggestionMarkup(query){
  const term=String(query||'').trim().toLowerCase();
  if(!term)return '';
- const found=(rosterState.players||[]).filter(x=>(x.name+' '+(x.email||'')+' '+(x.phone||'')).toLowerCase().includes(term)).slice(0,12);
+ const found=byPlayerFirstName(rosterState.players).filter(x=>(x.name+' '+(x.email||'')+' '+(x.phone||'')).toLowerCase().includes(term)).slice(0,12);
  const assignments=activeAssignments();
  return found.length?found.map(x=>{const a=assignments.find(z=>z.playerId===x.id);const t=S.teams.find(z=>z.id===a?.teamId);return `<button type="button" role="option" class="btn" data-dir-pick="${esc(x.id)}" style="display:block;width:100%;text-align:left;margin:3px 0;white-space:normal"><strong>${esc(x.name)}</strong><span class="mini" style="display:block">${esc(t?.name||'Unassigned to this event')}${x.email?' · '+esc(x.email):''}</span></button>`}).join(''):'<p class="note">No matching players.</p>';
 }
@@ -709,7 +710,7 @@ function updateDirectorySuggestions(){
 }
 function rosterPage(){
  if(!liveMode||cloudRole!=='director'||!session)return `<div class="panel"><h2>Private Player Directory</h2><p class="note">Sign in to Live Cloud as an authorized Director and run the V8.5.1 SQL migration. The private directory is never included in public tournament data.</p><button class="btn" data-tab="cloud">Open Cloud Settings</button></div>`;
- const p=rosterState.players||[],assign=activeAssignments(),term=directoryQuery.trim().toLowerCase();
+ const p=byPlayerFirstName(rosterState.players),assign=activeAssignments(),term=directoryQuery.trim().toLowerCase();
  const filtered=p;const matches=p.filter(x=>(x.name+' '+(x.email||'')+' '+(x.phone||'')).toLowerCase().includes(term));
  const selected=p.find(x=>x.id===directorySelectedId);
  const selectedAssignment=selected?assign.find(a=>a.playerId===selected.id):null;
@@ -761,7 +762,7 @@ function rosterModal(id=''){
 }
 function directoryAssign(id='',initialTeam=''){
  const existing=activeAssignments().find(a=>a.playerId===id),d=document.createElement('div');d.className='modalcover';
- const options=rosterState.players.map(p=>`<option value="${esc(p.id)}" ${p.id===id?'selected':''}>${esc(p.name)}</option>`).join('');
+ const options=byPlayerFirstName(rosterState.players).map(p=>`<option value="${esc(p.id)}" ${p.id===id?'selected':''}>${esc(p.name)}</option>`).join('');
  if(!options){alert('Create a player first.');return}
  d.innerHTML=`<div class="modal"><h2>Assign Player to Team</h2><p class="note">Assignment applies only to ${esc(S.title)}.</p>
  <label class="field"><span>Player</span><select id="daPlayer">${options}</select></label>
@@ -796,7 +797,7 @@ function nav(){
  if(!opts.some(x=>x[0]===tab))tab=opts[0][0];
  return `<nav class="tabs" aria-label="Main navigation">${opts.map(([k,n,ico])=>`<button data-tab="${k}" class="${tab===k?'selected':''}" ${tab===k?'aria-current="page"':''}><span class="navico" aria-hidden="true">${ico}</span>${n}</button>`).join('')}</nav>`;
 }
-function header(){return `<div class="top"><div class="shell" style="padding-bottom:0"><div class="toprow"><div><div class="brand"><span class="brand-mark">♛</span>${esc(S.title)}</div><div class="subtitle">SOVEREIGN SPORTS · V8.5.3 RC2 ${liveMode?'LIVE':'PRACTICE'} · ${esc(mode.toUpperCase())}</div></div><select id="modeSelect" aria-label="Switch app role" style="width:auto;min-width:112px" ${liveMode&&refSecret?'disabled':''}>${MODES.map(m=>`<option value="${m}" ${m===mode?'selected':''}>${m[0].toUpperCase()+m.slice(1)}</option>`).join('')}</select></div>${nav()}</div></div>`}
+function header(){return `<div class="top"><div class="shell" style="padding-bottom:0"><div class="toprow"><div><div class="brand"><span class="brand-mark">♛</span>${esc(S.title)}</div><div class="subtitle">SOVEREIGN SPORTS · V8.5.3 RC3 ${liveMode?'LIVE':'PRACTICE'} · ${esc(mode.toUpperCase())}</div></div><select id="modeSelect" aria-label="Switch app role" style="width:auto;min-width:112px" ${liveMode&&refSecret?'disabled':''}>${MODES.map(m=>`<option value="${m}" ${m===mode?'selected':''}>${m[0].toUpperCase()+m.slice(1)}</option>`).join('')}</select></div>${nav()}</div></div>`}
 function matchCard(m,options={}){if(m.stage==='playoff' && m.autoWinner && !m.away){return `<div class="match bye-card"><div class="row"><strong>Semifinal qualification</strong><span class="tag">BYE · ADVANCED</span></div><div class="team"><strong>${esc(team(m.autoWinner))}</strong></div><div class="mini">Earned a semifinal bye · Automatically advances to the next round. No court, official, or score required.</div></div>`}const result=winner(m),finalized=isDone(m);return `<div class="match"><div class="row"><strong style="color:var(--gold)">${esc(matchLabel(m))}</strong><span class="tag">${finalized?'Final':m.autoWinner?'Bye':'Scheduled'}</span></div><div class="team"><span>${esc(team(m.home))}</span><span class="score">${finalized?m.sets.filter(x=>x[0]>x[1]).length:'—'}</span></div><div class="team"><span>${esc(team(m.away))}</span><span class="score">${finalized?m.sets.filter(x=>x[1]>x[0]).length:'—'}</span></div><div class="mini">${finalized?esc(scoreText(m))+(result?' · Winner: '+esc(team(result)):' · Split 1–1 (no match winner)'):m.autoWinner?'Auto-advance: '+esc(team(m.autoWinner)):m.official?`Ref: ${esc(official(m.official))}`:'Referee not assigned'}${m.lineTeam?' · Lines: '+esc(team(m.lineTeam)):''}</div>${options.edit?`<div class="actions" style="margin-top:12px"><button class="btn" data-score="${esc(m.id)}">${result?'Correct Result':'Enter Result'}</button><button class="btn ghost" data-assign="${esc(m.id)}">Assign</button><button class="btn ghost" data-forfeit="${esc(m.id)}">Forfeit</button></div>`:''}${options.ref?`<button class="btn primary" style="width:100%;margin-top:12px" data-refscore="${esc(m.id)}">Report score</button>`:''}</div>`}
 function official(id){if(id.startsWith('team:'))return team(id.slice(5));return S.refs.find(x=>x.id===id)?.name||'Unassigned'}
 function home(){const issues=validate(),errors=issues.filter(x=>x.level==='error').length,completed=S.matches.filter(isDone).length;return `${S.status==='completed'?`<div class="notice good"><strong>🏆 Tournament complete.</strong> ${tournamentChampion()?`Champions: ${esc(team(tournamentChampion()))}`:'Review championship result.'} · Results preserved.</div>${championPanel()}`:tournamentChampion()?`<div class="notice good"><strong>🏆 Championship winner: ${esc(team(tournamentChampion()))}.</strong> Use Finish Tournament in Setup after confirming all score approvals. The final public display will announce the champions.</div>`:''}${clockPanel()}<div class="app-intro"><div class="app-eyebrow">DIRECTOR DASHBOARD</div><h1 class="app-heading">Your tournament, at a glance.</h1><p class="app-subheading">Everything you need in a tap.</p></div><div class="stats"><div class="stat"><strong>${S.teams.length}</strong><small>Teams</small></div><div class="stat"><strong>${S.settings.courts}</strong><small>Courts</small></div><div class="stat"><strong>${completed}/${S.matches.filter(m=>m.slot!=='BYE').length}</strong><small>Matches final</small></div><div class="stat"><strong>${pendingCount()}</strong><small>Awaiting approval</small></div></div><div class="panel"><h2>Next action</h2><p class="note">${pendingCount()?pendingCount()+' score report(s) awaiting review.':!S.matches.length?'Configure your teams and generate the schedule in Prepare.':!allPoolsDone()?'Continue pool matches and approve each submitted score.':!S.matches.some(m=>m.stage==='playoff')?'Pool results complete. Generate your playoff bracket from Matches & Scores.':tournamentChampion()?'Championship results recorded. Review and finish the event when ready.':'Continue bracket rounds and approve scores before advancing.'}</p><div class="actions"><button class="btn primary" data-tab="matches">Matches & Scores</button><button class="btn" data-tab="bracket">Bracket</button></div></div>${!liveMode?`<div class="panel"><h2>Local practice tools</h2><p class="note">Only affects data stored on this device. Live tournament cloud data is unchanged.</p><div class="quick-actions"><button class="btn primary" id="practiceStart">▶ Start Practice Tournament</button><button class="btn" id="practiceRef">✎ Try Referee Mode</button><button class="btn ghost" id="practiceReset">Reset Local Practice</button></div></div>`:``}<div class="panel"><h2>Schedule status</h2><p class="note">${errors?'There are '+errors+' critical issue(s) to resolve before publishing.':'No critical scheduling conflicts detected.'} ${issues.length-errors} additional warnings or advisories.</p><button class="btn primary" data-tab="safety">Open Safety Check →</button> <span class="tag">${esc(S.status.toUpperCase())}</span></div>${reportQueue()}<div class="panel"><h2>Up next · automatic court board</h2>${nextUp().map(x=>matchCard(x,{edit:true})).join('')||'<p class="note">Generate a match schedule to get started.</p>'}</div>`}
