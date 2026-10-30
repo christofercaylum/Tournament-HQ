@@ -457,15 +457,71 @@ function registrationRosterPreview(submissionId){
 }
 // RC12: Review each Jotform roster slot before creating permanent player profiles or event assignments.
 // Uses the existing private directory save; never edits competition state or marks waivers valid.
-function registrationRosterImport(submissionId){
+// RC13: Resolve missing or mismatched submission links in the import flow.
+// No competition state mutations; a Director explicitly chooses an existing Setup team.
+async function resolveRosterImportLink(row,form,submissionId){
+ if(form.eventKey!==S.title){alert('This form is connected to "'+form.eventKey+'" but the active tournament is "'+S.title+'". Select the matching event before importing.');return null}
+ const norm=s=>String(s||'').trim().replace(/\s+/g,' ').toLowerCase();
+ const exact=teamRegState.items.find(x=>x.formId===form.formId&&String(x.submissionId)===String(submissionId)&&x.eventKey===S.title);
+ const candidates=teamRegState.items.filter(x=>x.eventKey===S.title&&x.status==='approved'&&x.competitionTeamId&&S.teams.some(t=>t.id===x.competitionTeamId));
+ const submitted=String(row.teamName||exact?.teamName||'').trim();
+ const teamNames=(S.teams||[]).map(t=>`<option value="${esc(t.id)}" ${norm(t.name)===norm(submitted)?'selected':''}>${esc(t.name)}</option>`).join('');
+ const related=candidates.filter(x=>norm(x.teamName)===norm(submitted));
+ const suggested=exact?.competitionTeamId&&S.teams.some(t=>t.id===exact.competitionTeamId)?exact.competitionTeamId:(related.length===1?related[0].competitionTeamId:(S.teams.find(t=>norm(t.name)===norm(submitted))?.id||''));
+ return await new Promise(resolve=>{
+  const d=document.createElement('div');d.className='modalcover';
+  const close=value=>{d.remove();resolve(value)};
+  d.innerHTML=`<div class="modal"><h2>Resolve roster registration · RC13</h2>
+   <p class="note">This Jotform submission isn't linked to an approved Setup team. Match the submission to the correct team before importing players. Nothing will change the competition schedule.</p>
+   <div class="tile"><strong>Submitted team:</strong> ${esc(submitted||'No team name found')}<br><span class="mini">${esc(form.eventKey)} · Submission ${esc(String(submissionId))}</span></div>
+   <label class="field"><span>Competition team in Setup (confirm manually)</span><select id="riLinkTeam"><option value="">Select a team</option>${teamNames}</select></label>
+   <p class="note" id="riLinkMsg">A matching name is only a suggestion. Confirm the team before continuing.</p>
+   <div class="actions"><button class="btn primary" id="riLinkSave">Confirm team & continue</button><button class="btn ghost" id="riLinkCancel">Cancel</button></div></div>`;
+  document.body.appendChild(d);
+  const sel=d.querySelector('#riLinkTeam');sel.value=suggested;
+  d.querySelector('#riLinkCancel').onclick=()=>close(null);
+  d.querySelector('#riLinkSave').onclick=async()=>{
+   const team=S.teams.find(t=>t.id===sel.value);if(!team)return alert('Select the Setup team for this submission.');
+   if(norm(team.name)!==norm(submitted)&&!confirm('Jotform says "'+submitted+'", but Setup says "'+team.name+'". Confirm this is the correct team?'))return;
+   const other=candidates.filter(x=>x.competitionTeamId===team.id&&x.id!==exact?.id);
+   if(other.length&&!confirm('This team already has a confirmed registration from another submission. Reuse that team for this roster import? No registration will be overwritten.'))return;
+   const btn=d.querySelector('#riLinkSave');btn.disabled=true;btn.textContent='Confirming…';
+   if(exact){
+    const updated={...exact,status:'approved',competitionTeamId:team.id};
+    const ok=await teamRegSave(teamRegState.items.map(x=>x.id===exact.id?updated:x));
+    if(!ok){btn.disabled=false;btn.textContent='Confirm team & continue';return}
+    close(updated);return;
+   }
+   if(other.length){
+    // Use a confirmed existing team link for this import only; preserve both submission histories.
+    close({...other[0],teamName:submitted||team.name,submissionId:String(submissionId)});return;
+   }
+   const item={id:uid(),formId:form.formId,submissionId:String(submissionId),eventKey:S.title,teamName:submitted||team.name,captainName:String(row.name||'Unknown captain'),captainEmail:String(row.email||''),captainPhone:String(row.phone||''),status:'approved',competitionTeamId:team.id};
+   const collisions=teamRegState.items.filter(x=>x.eventKey===S.title&&norm(x.teamName)===norm(item.teamName));
+   if(collisions.length){
+    // Avoid creating a duplicate record under database uniqueness rules.
+    alert('A registration for this team already exists but is not linked to the selected Setup team. Open Update links on that registration and retry. Nothing has been changed.');
+    btn.disabled=false;btn.textContent='Confirm team & continue';return;
+   }
+   const ok=await teamRegSave([...teamRegState.items,item]);
+   if(!ok){btn.disabled=false;btn.textContent='Confirm team & continue';return}
+   close(item);
+  };
+ });
+}
+async function registrationRosterImport(submissionId){
  const row=jfPreview.rows.find(x=>String(x.submissionId)===String(submissionId));
  const form=connectionState.items.find(x=>x.formId===jfPreview.formId&&x.type==='registration');
  if(!row||!form)return alert('Preview the connected team registration first.');
  if(!rosterState.loaded||rosterState.error)return alert('Refresh the Player Directory and retry.');
- const reg=teamRegState.items.find(x=>x.formId===jfPreview.formId&&String(x.submissionId)===String(submissionId)&&x.eventKey===S.title);
- if(!reg||reg.status!=='approved'||!reg.competitionTeamId)return alert('First confirm this team registration and link it to an existing Setup team using Update links.');
+ if(!teamRegState.loaded||teamRegState.error)return alert('Refresh Team Registrations and retry.');
+ let reg=teamRegState.items.find(x=>x.formId===jfPreview.formId&&String(x.submissionId)===String(submissionId)&&x.eventKey===S.title);
+ if(!reg||reg.status!=='approved'||!reg.competitionTeamId||!S.teams.some(t=>t.id===reg.competitionTeamId)){
+  reg=await resolveRosterImportLink(row,form,submissionId);
+  if(!reg)return;
+ }
  const selectedTeam=S.teams.find(t=>t.id===reg.competitionTeamId);
- if(!selectedTeam)return alert('The linked Setup team no longer exists. Update the team link first.');
+ if(!selectedTeam)return alert('The selected Setup team is unavailable. Refresh the tournament and retry.');
  const entries=(Array.isArray(row.roster)?row.roster:[]).filter(x=>String(x.name||'').trim());
  if(!entries.length)return alert('This submission has no roster names to import.');
  const norm=s=>String(s||'').trim().replace(/\s+/g,' ').toLowerCase();
@@ -481,7 +537,7 @@ function registrationRosterImport(submissionId){
   <label class="field"><span>Existing player profile (confirm identity)</span><select data-ri-person="${i}"><option value="">Select player</option>${players.map(p=>`<option value="${esc(p.id)}" ${p.id===(captain?reg.captainPlayerId:'')||!captain&&matches.length===1&&matches[0].id===p.id?'selected':''}>${esc(p.name)}${p.email?' · '+esc(p.email):''}</option>`).join('')}</select></label>
   <p class="note">${already?'A matching name already appears on this team. ':''}${matches.length>1?'Several directory profiles have this name—select carefully. ':''}Name-only matches must be confirmed by a Director. New profiles contain a name only; no contact consent or waiver is inferred.</p></div>`
  }).join('');
- d.innerHTML=`<div class="modal"><h2>Reviewed roster import · RC12</h2><p class="note"><strong>${esc(reg.teamName)}</strong> · ${esc(S.title)} · ${esc(selectedTeam.name)} in Setup</p>
+ d.innerHTML=`<div class="modal"><h2>Reviewed roster import · RC13</h2><p class="note"><strong>${esc(reg.teamName)}</strong> · ${esc(S.title)} · ${esc(selectedTeam.name)} in Setup</p>
  <p class="note">Choose an action for each submitted player. Existing profiles must be selected explicitly. A player already assigned elsewhere in this event cannot be moved here through this import. The captain is not automatically added unless selected below.</p>
  ${block}<div class="actions"><button class="btn primary" id="riSave">Review & save selected roster</button><button class="btn ghost" id="riCancel">Cancel</button></div></div>`;
  document.body.appendChild(d);d.querySelector('#riCancel').onclick=()=>d.remove();
@@ -541,7 +597,7 @@ function connectionPage(){
  ${connectionState.error?`<div class="notice bad">${esc(connectionState.error)}</div>`:''}
  <div class="panel"><div class="row"><h2>Saved form links</h2><span class="tag">${items.length} connected links</span></div><p class="note">Forms are configured privately in Supabase. Saving a link does not import submissions, validate signatures, or grant Jotform API access.</p>
  <div class="actions"><button class="btn primary" id="connectionAdd">+ Add form link</button><button class="btn" id="connectionRefresh">Refresh</button></div>${cards||'<p class="note">No form links configured.</p>'}</div>
- ${jfPreviewPanel()}${teamRegPanel()}${waiverState.error?`<div class="notice bad">Waiver review status unavailable: ${esc(waiverState.error)}</div>`:''}<div class="panel"><h2>Manual import, waiver and team registration review (RC11)</h2><p class="note">Preview submissions for each connected form, then choose new players to import. Existing or uncertain matches are intentionally skipped. Team registrations can be reviewed independently of incomplete rosters; this does not change live competition teams or schedules.</p></div>`;
+ ${jfPreviewPanel()}${teamRegPanel()}${waiverState.error?`<div class="notice bad">Waiver review status unavailable: ${esc(waiverState.error)}</div>`:''}<div class="panel"><h2>Manual import, waiver and team registration review (RC13)</h2><p class="note">Preview submissions for each connected form, then choose new players to import. Existing or uncertain matches are intentionally skipped. Team registrations can be reviewed independently of incomplete rosters; this does not change live competition teams or schedules.</p></div>`;
 }
 function connectionModal(index=-1){
  const orig=index>=0?connectionState.items[index]:null;
@@ -692,7 +748,7 @@ function nav(){
  if(!opts.some(x=>x[0]===tab))tab=opts[0][0];
  return `<nav class="tabs" aria-label="Main navigation">${opts.map(([k,n,ico])=>`<button data-tab="${k}" class="${tab===k?'selected':''}" ${tab===k?'aria-current="page"':''}><span class="navico" aria-hidden="true">${ico}</span>${n}</button>`).join('')}</nav>`;
 }
-function header(){return `<div class="top"><div class="shell" style="padding-bottom:0"><div class="toprow"><div><div class="brand"><span class="brand-mark">♛</span>${esc(S.title)}</div><div class="subtitle">SOVEREIGN SPORTS · V8.5.2 RC12 ${liveMode?'LIVE':'PRACTICE'} · ${esc(mode.toUpperCase())}</div></div><select id="modeSelect" aria-label="Switch app role" style="width:auto;min-width:112px" ${liveMode&&refSecret?'disabled':''}>${MODES.map(m=>`<option value="${m}" ${m===mode?'selected':''}>${m[0].toUpperCase()+m.slice(1)}</option>`).join('')}</select></div>${nav()}</div></div>`}
+function header(){return `<div class="top"><div class="shell" style="padding-bottom:0"><div class="toprow"><div><div class="brand"><span class="brand-mark">♛</span>${esc(S.title)}</div><div class="subtitle">SOVEREIGN SPORTS · V8.5.2 RC13 ${liveMode?'LIVE':'PRACTICE'} · ${esc(mode.toUpperCase())}</div></div><select id="modeSelect" aria-label="Switch app role" style="width:auto;min-width:112px" ${liveMode&&refSecret?'disabled':''}>${MODES.map(m=>`<option value="${m}" ${m===mode?'selected':''}>${m[0].toUpperCase()+m.slice(1)}</option>`).join('')}</select></div>${nav()}</div></div>`}
 function matchCard(m,options={}){if(m.stage==='playoff' && m.autoWinner && !m.away){return `<div class="match bye-card"><div class="row"><strong>Semifinal qualification</strong><span class="tag">BYE · ADVANCED</span></div><div class="team"><strong>${esc(team(m.autoWinner))}</strong></div><div class="mini">Earned a semifinal bye · Automatically advances to the next round. No court, official, or score required.</div></div>`}const result=winner(m),finalized=isDone(m);return `<div class="match"><div class="row"><strong style="color:var(--gold)">${esc(matchLabel(m))}</strong><span class="tag">${finalized?'Final':m.autoWinner?'Bye':'Scheduled'}</span></div><div class="team"><span>${esc(team(m.home))}</span><span class="score">${finalized?m.sets.filter(x=>x[0]>x[1]).length:'—'}</span></div><div class="team"><span>${esc(team(m.away))}</span><span class="score">${finalized?m.sets.filter(x=>x[1]>x[0]).length:'—'}</span></div><div class="mini">${finalized?esc(scoreText(m))+(result?' · Winner: '+esc(team(result)):' · Split 1–1 (no match winner)'):m.autoWinner?'Auto-advance: '+esc(team(m.autoWinner)):m.official?`Ref: ${esc(official(m.official))}`:'Referee not assigned'}${m.lineTeam?' · Lines: '+esc(team(m.lineTeam)):''}</div>${options.edit?`<div class="actions" style="margin-top:12px"><button class="btn" data-score="${esc(m.id)}">${result?'Correct Result':'Enter Result'}</button><button class="btn ghost" data-assign="${esc(m.id)}">Assign</button><button class="btn ghost" data-forfeit="${esc(m.id)}">Forfeit</button></div>`:''}${options.ref?`<button class="btn primary" style="width:100%;margin-top:12px" data-refscore="${esc(m.id)}">Report score</button>`:''}</div>`}
 function official(id){if(id.startsWith('team:'))return team(id.slice(5));return S.refs.find(x=>x.id===id)?.name||'Unassigned'}
 function home(){const issues=validate(),errors=issues.filter(x=>x.level==='error').length,completed=S.matches.filter(isDone).length;return `${S.status==='completed'?`<div class="notice good"><strong>🏆 Tournament complete.</strong> ${tournamentChampion()?`Champions: ${esc(team(tournamentChampion()))}`:'Review championship result.'} · Results preserved.</div>${championPanel()}`:tournamentChampion()?`<div class="notice good"><strong>🏆 Championship winner: ${esc(team(tournamentChampion()))}.</strong> Use Finish Tournament in Setup after confirming all score approvals. The final public display will announce the champions.</div>`:''}${clockPanel()}<div class="app-intro"><div class="app-eyebrow">DIRECTOR DASHBOARD</div><h1 class="app-heading">Your tournament, at a glance.</h1><p class="app-subheading">Everything you need in a tap.</p></div><div class="stats"><div class="stat"><strong>${S.teams.length}</strong><small>Teams</small></div><div class="stat"><strong>${S.settings.courts}</strong><small>Courts</small></div><div class="stat"><strong>${completed}/${S.matches.filter(m=>m.slot!=='BYE').length}</strong><small>Matches final</small></div><div class="stat"><strong>${pendingCount()}</strong><small>Awaiting approval</small></div></div><div class="panel"><h2>Next action</h2><p class="note">${pendingCount()?pendingCount()+' score report(s) awaiting review.':!S.matches.length?'Configure your teams and generate the schedule in Prepare.':!allPoolsDone()?'Continue pool matches and approve each submitted score.':!S.matches.some(m=>m.stage==='playoff')?'Pool results complete. Generate your playoff bracket from Matches & Scores.':tournamentChampion()?'Championship results recorded. Review and finish the event when ready.':'Continue bracket rounds and approve scores before advancing.'}</p><div class="actions"><button class="btn primary" data-tab="matches">Matches & Scores</button><button class="btn" data-tab="bracket">Bracket</button></div></div>${!liveMode?`<div class="panel"><h2>Local practice tools</h2><p class="note">Only affects data stored on this device. Live tournament cloud data is unchanged.</p><div class="quick-actions"><button class="btn primary" id="practiceStart">▶ Start Practice Tournament</button><button class="btn" id="practiceRef">✎ Try Referee Mode</button><button class="btn ghost" id="practiceReset">Reset Local Practice</button></div></div>`:``}<div class="panel"><h2>Schedule status</h2><p class="note">${errors?'There are '+errors+' critical issue(s) to resolve before publishing.':'No critical scheduling conflicts detected.'} ${issues.length-errors} additional warnings or advisories.</p><button class="btn primary" data-tab="safety">Open Safety Check →</button> <span class="tag">${esc(S.status.toUpperCase())}</span></div>${reportQueue()}<div class="panel"><h2>Up next · automatic court board</h2>${nextUp().map(x=>matchCard(x,{edit:true})).join('')||'<p class="note">Generate a match schedule to get started.</p>'}</div>`}
