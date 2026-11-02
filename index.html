@@ -877,7 +877,7 @@ function nav(){
  if(!opts.some(x=>x[0]===tab))tab=opts[0][0];
  return `<nav class="tabs" aria-label="Main navigation">${opts.map(([k,n,ico])=>`<button data-tab="${k}" class="${tab===k?'selected':''}" ${tab===k?'aria-current="page"':''}><span class="navico" aria-hidden="true">${ico}</span>${n}</button>`).join('')}</nav>`;
 }
-function header(){return `<div class="top"><div class="shell" style="padding-bottom:0"><div class="toprow"><div><div class="brand"><span class="brand-mark">♛</span>${esc(S.title)}</div><div class="subtitle">SOVEREIGN SPORTS · V8.6 REBUILD S3a ${liveMode?'LIVE':'PRACTICE'} · ${esc(mode.toUpperCase())}</div></div><select id="modeSelect" aria-label="Switch app role" style="width:auto;min-width:112px" ${liveMode&&refSecret?'disabled':''}>${MODES.map(m=>`<option value="${m}" ${m===mode?'selected':''}>${m[0].toUpperCase()+m.slice(1)}</option>`).join('')}</select></div>${nav()}</div></div>`}
+function header(){return `<div class="top"><div class="shell" style="padding-bottom:0"><div class="toprow"><div><div class="brand"><span class="brand-mark">♛</span>${esc(S.title)}</div><div class="subtitle">SOVEREIGN SPORTS · V8.6 REBUILD S3b ${liveMode?'LIVE':'PRACTICE'} · ${esc(mode.toUpperCase())}</div></div><select id="modeSelect" aria-label="Switch app role" style="width:auto;min-width:112px" ${liveMode&&refSecret?'disabled':''}>${MODES.map(m=>`<option value="${m}" ${m===mode?'selected':''}>${m[0].toUpperCase()+m.slice(1)}</option>`).join('')}</select></div>${nav()}</div></div>`}
 function matchCard(m,options={}){if(m.stage==='playoff' && m.autoWinner && !m.away){return `<div class="match bye-card"><div class="row"><strong>Semifinal qualification</strong><span class="tag">BYE · ADVANCED</span></div><div class="team"><strong>${esc(team(m.autoWinner))}</strong></div><div class="mini">Earned a semifinal bye · Automatically advances to the next round. No court, official, or score required.</div></div>`}const result=winner(m),finalized=isDone(m);return `<div class="match"><div class="row"><strong style="color:var(--gold)">${esc(matchLabel(m))}</strong><span class="tag">${finalized?'Final':m.autoWinner?'Bye':'Scheduled'}</span></div><div class="team"><span>${esc(team(m.home))}</span><span class="score">${finalized?m.sets.filter(x=>x[0]>x[1]).length:'—'}</span></div><div class="team"><span>${esc(team(m.away))}</span><span class="score">${finalized?m.sets.filter(x=>x[1]>x[0]).length:'—'}</span></div><div class="mini">${finalized?esc(scoreText(m))+(result?' · Winner: '+esc(team(result)):' · Split 1–1 (no match winner)'):m.autoWinner?'Auto-advance: '+esc(team(m.autoWinner)):m.official?`Ref: ${esc(official(m.official))}`:'Referee not assigned'}${m.lineTeam?' · Lines: '+esc(team(m.lineTeam)):''}</div>${options.edit?`<div class="actions" style="margin-top:12px"><button class="btn" data-score="${esc(m.id)}">${result?'Correct Result':'Enter Result'}</button><button class="btn ghost" data-assign="${esc(m.id)}">Assign</button><button class="btn ghost" data-forfeit="${esc(m.id)}">Forfeit</button></div>`:''}${options.ref?`<button class="btn primary" style="width:100%;margin-top:12px" data-refscore="${esc(m.id)}">Report score</button>`:''}</div>`}
 function official(id){if(id.startsWith('team:'))return team(id.slice(5));return S.refs.find(x=>x.id===id)?.name||'Unassigned'}
 function home(){const issues=validate(),errors=issues.filter(x=>x.level==='error').length,completed=S.matches.filter(isDone).length;return `${S.status==='completed'?`<div class="notice good"><strong>🏆 Tournament complete.</strong> ${tournamentChampion()?`Champions: ${esc(team(tournamentChampion()))}`:'Review championship result.'} · Results preserved.</div>${championPanel()}`:tournamentChampion()?`<div class="notice good"><strong>🏆 Championship winner: ${esc(team(tournamentChampion()))}.</strong> Use Finish Tournament in Setup after confirming all score approvals. The final public display will announce the champions.</div>`:''}${clockPanel()}<div class="app-intro"><div class="app-eyebrow">DIRECTOR DASHBOARD</div><h1 class="app-heading">Your tournament, at a glance.</h1><p class="app-subheading">Everything you need in a tap.</p></div><div class="stats"><div class="stat"><strong>${S.teams.length}</strong><small>Teams</small></div><div class="stat"><strong>${S.settings.courts}</strong><small>Courts</small></div><div class="stat"><strong>${completed}/${S.matches.filter(m=>m.slot!=='BYE').length}</strong><small>Matches final</small></div><div class="stat"><strong>${pendingCount()}</strong><small>Awaiting approval</small></div></div><div class="panel"><h2>Next action</h2><p class="note">${pendingCount()?pendingCount()+' score report(s) awaiting review.':!S.matches.length?'Configure your teams and generate the schedule in Prepare.':!allPoolsDone()?'Continue pool matches and approve each submitted score.':!S.matches.some(m=>m.stage==='playoff')?'Pool results complete. Generate your playoff bracket from Matches & Scores.':tournamentChampion()?'Championship results recorded. Review and finish the event when ready.':'Continue bracket rounds and approve scores before advancing.'}</p><div class="actions"><button class="btn primary" data-tab="matches">Matches & Scores</button><button class="btn" data-tab="bracket">Bracket</button></div></div>${!liveMode?`<div class="panel"><h2>Local practice tools</h2><p class="note">Only affects data stored on this device. Live tournament cloud data is unchanged.</p><div class="quick-actions"><button class="btn primary" id="practiceStart">▶ Start Practice Tournament</button><button class="btn" id="practiceRef">✎ Try Referee Mode</button><button class="btn ghost" id="practiceReset">Reset Local Practice</button></div></div>`:``}<div class="panel"><h2>Schedule status</h2><p class="note">${errors?'There are '+errors+' critical issue(s) to resolve before publishing.':'No critical scheduling conflicts detected.'} ${issues.length-errors} additional warnings or advisories.</p><button class="btn primary" data-tab="safety">Open Safety Check →</button> <span class="tag">${esc(S.status.toUpperCase())}</span></div>${reportQueue()}<div class="panel"><h2>Up next · automatic court board</h2>${nextUp().map(x=>matchCard(x,{edit:true})).join('')||'<p class="note">Generate a match schedule to get started.</p>'}</div>`}
@@ -1269,7 +1269,7 @@ function multiSetupPage(){
  return `<div class="panel"><div class="row"><h2>${multiEscape(item?.title||'Tournament')} · Original Setup</h2><button class="btn" id="multiExitSetup" ${multiEditBusy?'disabled':''}>Return to Tournament Manager</button></div>
  <div class="notice"><strong>Independent draft.</strong> Configure this event using the original Setup and pool scheduler. Saving stores only this event. Publishing, QR access, score submission and live switching remain disabled. Harvest Crown is unaffected.</div>
  <p class="note">Event ID: ${multiEscape(multiEditEventId)} · Draft cloud version: ${multiEditVersion}</p>
- ${multiEditNotice?`<div class="notice ${multiEditNotice.startsWith('NOT saved')?'bad':'good'}">${multiEscape(multiEditNotice)}</div>`:''}</div>${contents}<div class="panel"><h3>Pool Play · Original Schedule Generator</h3><p class="note">Generate only pool matches; playoff bracket generation remains locked until approved pool results are available. Regenerating replaces this event’s unscored pool matches.</p><div class="actions"><button class="btn primary" id="multiGeneratePool" ${multiEditBusy?'disabled':''}>Generate &amp; save pool schedule</button></div>${multiEditState.matches?.length?`<p class="note">${multiEditState.matches.length} saved draft pool matches</p><div style="overflow-x:auto"><table><thead><tr><th>Start</th><th>Court</th><th>Match</th></tr></thead><tbody>${multiEditState.matches.slice().sort((a,b)=>a.start-b.start||a.court-b.court).map(m=>`<tr><td>${multiEscape(fmt(m.start))}</td><td>${multiEscape(multiEditState.courts[m.court]||'Court '+(m.court+1))}</td><td>${multiEscape(multiEditState.teams.find(t=>t.id===m.home)?.name||'TBD')} vs ${multiEscape(multiEditState.teams.find(t=>t.id===m.away)?.name||'TBD')}</td></tr>`).join('')}</tbody></table></div>`:'<p class="note">No pool schedule saved yet.</p>'}</div>`;
+ ${multiEditNotice?`<div class="notice ${multiEditNotice.startsWith('NOT saved')?'bad':'good'}">${multiEscape(multiEditNotice)}</div>`:''}</div>${contents}<div class="panel"><h3>Pool Play · Original Schedule Generator</h3><p class="note">Generate only pool matches; playoff bracket generation remains locked until approved pool results are available. Regenerating replaces this event’s unscored pool matches.</p><div class="actions"><button class="btn primary" id="multiGeneratePool" ${multiEditBusy?'disabled':''}>Generate &amp; save pool schedule</button></div><div id="multiPoolStatus" class="notice" role="status" aria-live="polite" style="display:none"></div><div id="multiPoolResults">${multiEditState.matches?.length?`<p class="note">${multiEditState.matches.length} saved draft pool matches</p><div style="overflow-x:auto"><table><thead><tr><th>Start</th><th>Court</th><th>Match</th></tr></thead><tbody>${multiEditState.matches.slice().sort((a,b)=>a.start-b.start||a.court-b.court).map(m=>`<tr><td>${multiEscape(fmt(m.start))}</td><td>${multiEscape(multiEditState.courts[m.court]||'Court '+(m.court+1))}</td><td>${multiEscape(multiEditState.teams.find(t=>t.id===m.home)?.name||'TBD')} vs ${multiEscape(multiEditState.teams.find(t=>t.id===m.away)?.name||'TBD')}</td></tr>`).join('')}</tbody></table></div>`:'<p class="note">No pool schedule saved yet.</p>'}</div></div>`;
 }
 function multiBindSetup(){
  // Keep draft playoff choices synchronized with the team-count input.
@@ -1292,23 +1292,43 @@ function multiBindSetup(){
  if(teamCountInput)teamCountInput.addEventListener('input',updateDraftPlayoffOptions);
  if($('multiExitSetup'))$('multiExitSetup').onclick=multiCloseSetup;
  if($('multiGeneratePool'))$('multiGeneratePool').onclick=async()=>{
-  if(multiEditBusy||!multiEditState)return;
-  if(setupDraft){multiEditNotice='Save Setup first, then generate the schedule using those settings.';render();return;}
-  if(multiEditState.matches.length&&!confirm('Replace this event’s existing UNscored pool schedule?'))return;
+  // iOS Safari may keep the last form input focused and render() deliberately
+  // ignores redraws in that state. Show all scheduling feedback inline instead.
+  document.activeElement?.blur?.();
+  const button=$('multiGeneratePool'),status=$('multiPoolStatus'),results=$('multiPoolResults');
+  const say=(message,bad=false)=>{if(status){status.style.display='block';status.className='notice '+(bad?'bad':'good');status.textContent=message;}multiEditNotice=message;};
+  if(multiEditBusy||!multiEditState){say('This draft is busy or has not loaded. Try reopening it.',true);return;}
+  if(setupDraft){say('Unsaved Setup fields: save Setup first, then try Generate & save pool schedule.',true);return;}
+  if(multiEditState.matches.length&&!confirm('Replace this event’s existing unscored pool schedule?'))return;
+  button.disabled=true;
   const before=copy(multiEditState);
+  say('Generating pool schedule…');
   multiDeferSave=true;
-  try { multiWithDraft(()=>generate()); }
-  catch(e){multiEditState=before;multiEditNotice='Schedule generation failed: '+(e.message||String(e));render();return;}
-  finally {multiDeferSave=false;}
-  if(!multiEditState.matches?.length){multiEditNotice='No schedule generated. Check tournament format and rest settings, then try again.';render();return;}
-  const count=multiEditState.matches.length;
-  multiEditNotice='Generated '+count+' pool matches. Saving this event’s schedule to Supabase…';render();
-  await multiSaveDraft();
-  if(!multiEditNotice.startsWith('NOT saved')){
-    multiEditNotice='Saved '+count+' pool matches to this tournament only · cloud version '+multiEditVersion;
-    render();
-  }
-};
+  try{
+   // The existing generator is the same tested engine used by Harvest Crown.
+   const liveState=S;multiEditContext=true;S=multiEditState;
+   try{generate();multiEditState=copy(S);}finally{S=liveState;multiEditContext=false;}
+   if(!multiEditState.matches?.length)throw Error('Generator returned zero matches; check tournament format and rest settings.');
+   if(multiEditState.matches.some(m=>m.stage!=='pool'))throw Error('Non-pool match produced; save cancelled.');
+   const count=multiEditState.matches.length;
+   const state=copy(multiEditState),expected=multiEditVersion;
+   say('Generated '+count+' pool matches. Saving to this event…');
+   const response=await client.rpc('hq_multi_save',{p_event_id:multiEditEventId,p_data:state,p_expected:expected});
+   if(response.error)throw response.error;
+   const check=await client.rpc('hq_multi_view',{p_event_id:multiEditEventId});
+   if(check.error)throw check.error;
+   if(check.data?.data?.eventId!==multiEditEventId)throw Error('Saved event identity mismatch.');
+   if(check.data.data.matches?.length!==count)throw Error('Cloud match count does not match generated schedule.');
+   multiEditState=copy(check.data.data);multiEditVersion=Number(check.data.version||response.data);
+   const saved=multiEditState;
+   if(results){results.innerHTML='<p class="note">'+count+' saved draft pool matches</p><div class="tablewrap"><table><thead><tr><th>Start</th><th>Court</th><th>Match</th></tr></thead><tbody>'+saved.matches.slice().sort((a,b)=>a.start-b.start||a.court-b.court).map(m=>'<tr><td>'+multiEscape(fmt(m.start))+'</td><td>'+multiEscape(saved.courts[m.court]||'Court '+(m.court+1))+'</td><td>'+multiEscape(saved.teams.find(t=>t.id===m.home)?.name||'TBD')+' vs '+multiEscape(saved.teams.find(t=>t.id===m.away)?.name||'TBD')+'</td></tr>').join('')+'</tbody></table></div>';}
+   say('Saved and reloaded '+count+' pool matches for this event. Cloud version '+multiEditVersion+'.');
+   status?.scrollIntoView?.({block:'nearest'});
+  }catch(e){
+   multiEditState=before;
+   say('Schedule not saved: '+(e.message||String(e)),true);
+  }finally{multiDeferSave=false;button.disabled=false;}
+ };
  if($('saveSetup')){for(const id of setupFieldIds){const el=$(id);if(el)el.addEventListener('input',captureSetupDraft)}$('saveSetup').onclick=()=>multiWithDraft(()=>saveSetup())}
  if($('saveTeams'))$('saveTeams').onclick=()=>multiWithDraft(()=>{document.querySelectorAll('[data-team]').forEach(x=>{const t=S.teams.find(t=>t.id===x.dataset.team);if(t)t.name=x.value.trim()||'Unnamed Team'});audit('Team names updated','Director','');local()});
  if($('saveCourts'))$('saveCourts').onclick=()=>multiWithDraft(()=>{document.querySelectorAll('[data-court]').forEach(x=>S.courts[+x.dataset.court]=x.value.trim()||'Court '+(+x.dataset.court+1));local()});
