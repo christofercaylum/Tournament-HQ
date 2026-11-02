@@ -349,7 +349,7 @@ function eventManagerPage(){
  const live=liveMode&&cloudRole==='director';
  const draftIds=new Set(eventCatalog.drafts.map(x=>x.event_id));
  return `<div class="app-intro"><div class="app-eyebrow">EVENT PLANNING</div><h1 class="app-heading">Tournament Manager</h1><p class="app-subheading">Create your event catalog without disturbing the tournament currently running.</p></div>
- <div class="notice"><strong>Safety-first RC8:</strong> You can inspect separate event competition storage, select a protected preparation workspace, preview, and configure independent event drafts. The current competition remains on its original cloud state. The competition engine still uses one shared cloud tournament. <strong>Event switching is intentionally unavailable</strong> until score reporting, court access, and roster references are made event-aware and tested.</div>
+ <div class="notice"><strong>Safety-first RC9:</strong> You can inspect separate event competition storage, select a protected preparation workspace, preview, and configure independent event drafts. The current competition remains on its original cloud state. The competition engine still uses one shared cloud tournament. <strong>Event switching is intentionally unavailable</strong> until score reporting, court access, and roster references are made event-aware and tested.</div>
  <div class="panel"><h2>Current competition</h2><div class="tile"><strong>${esc(S.title)}</strong><div class="mini">${esc(S.status)} · ${liveMode?'Live cloud state':'Local practice state'} · Matches: ${S.matches.length}</div><p class="note">This active competition will remain unchanged when you add a catalog event.</p></div></div>
  <div class="panel"><div class="row"><h2>Planned tournaments</h2>${live?'<button class="btn" id="eventCatalogRefresh">Refresh</button>':''}</div>
  ${!live?'<p class="notice bad">Sign in as an authorized Director in Live Mode to manage the private event catalog.</p>':eventCatalog.error?`<div class="notice bad">Catalog unavailable: ${esc(eventCatalog.error)}. Run the included SQL migration, then Refresh.</div>`:!eventCatalog.loaded?'<p class="note">Loading catalog…</p>':''}
@@ -409,6 +409,48 @@ async function draftScheduleOpen(eventId){
   draftScheduleWorkspace={eventId,revision:x.revision,draftRevision:dr.revision,config:conf,storage:x,saved:saved.matches||[],preview:null,configMatched:matches};render();
  }catch(e){alert('Unable to load draft schedule: '+(e.message||String(e)));}
 }
+// RC9: read-only review of isolated draft schedules. No legacy state or DB writes.
+function rc9ScheduleAudit(rows,config){
+ const issues=[],teams=Array.isArray(config?.teams)?config.teams:[],courts=Array.isArray(config?.courts)?config.courts:[],s=config?.settings||{};
+ const names=new Map(teams.map(t=>[String(t.id),String(t.name||t.id)]));
+ const counts=new Map(teams.map(t=>[String(t.id),0]));const usage=new Map(courts.map((_,i)=>[i,0]));
+ const slotDuration=Math.max(1,Number(s.minutes)||25),requiredRest=Math.max(0,Number(s.breakMinutes)||0,Number(s.rest)||0);
+ const startWindow=rc8ClockToMinutes(s.start),endWindow=rc8ClockToMinutes(s.end);
+ const ids=new Set(),valid=[];
+ for(const m of rows){
+  const id=String(m.match_id||''),a=String(m.home||''),b=String(m.away||''),court=Number(m.court),start=Number(m.start);
+  if(!id||ids.has(id))issues.push('Missing or repeated match identifier: '+(id||'(blank)'));ids.add(id);
+  if(!names.has(a)||!names.has(b)||a===b)issues.push('Unknown or duplicate team assignment in '+(id||'a match'));
+  if(!Number.isInteger(court)||court<0||court>=courts.length)issues.push('Invalid court in '+id);
+  if(!Number.isInteger(start)||start<0||start>=1440)issues.push('Invalid start time in '+id);
+  if(Number.isInteger(start)&&Number.isFinite(startWindow)&&Number.isFinite(endWindow)&&(start<startWindow||start+slotDuration>endWindow))issues.push('Outside event window: '+id);
+  if(names.has(a))counts.set(a,counts.get(a)+1);if(names.has(b))counts.set(b,counts.get(b)+1);
+  if(usage.has(court))usage.set(court,usage.get(court)+1);
+  if(names.has(a)&&names.has(b)&&a!==b&&usage.has(court)&&Number.isInteger(start))valid.push({id,a,b,court,start});
+ }
+ const warnings=[];
+ for(const [id,count] of counts)if(count===0)warnings.push(names.get(id)+' has no scheduled pool match');
+ for(let i=0;i<valid.length;i++)for(let j=i+1;j<valid.length;j++){
+  const a=valid[i],b=valid[j],delta=Math.abs(a.start-b.start);
+  if(delta<slotDuration){
+   if(a.court===b.court)issues.push('Court conflict: '+a.id+' and '+b.id);
+   if(a.a===b.a||a.a===b.b||a.b===b.a||a.b===b.b)issues.push('Team double-booked: '+a.id+' and '+b.id);
+  }else if(requiredRest>0&&delta<slotDuration+requiredRest&&(a.a===b.a||a.a===b.b||a.b===b.a||a.b===b.b))warnings.push('Short turnaround: '+a.id+' and '+b.id);
+ }
+ return {issues:[...new Set(issues)],warnings:[...new Set(warnings)],counts:[...counts].map(([id,count])=>({name:names.get(id),count})).sort((a,b)=>a.name.localeCompare(b.name,undefined,{sensitivity:'base'})),usage:[...usage].map(([court,count])=>({name:courts[court],count})),matchCount:rows.length};
+}
+function rc8ClockToMinutes(value){if(typeof value!=='string'||!/^\d{1,2}:\d{2}$/.test(value))return NaN;const [h,m]=value.split(':').map(Number);return h>=0&&h<24&&m>=0&&m<60?h*60+m:NaN}
+function rc9AuditPanel(rows,config){
+ if(!rows.length)return '';
+ const a=rc9ScheduleAudit(rows,config);
+ return `<details class="setup-fold" open><summary>Schedule review · ${a.issues.length} conflicts · ${a.warnings.length} advisories</summary>
+ <div class="notice ${a.issues.length?'bad':'good'}"><strong>${a.issues.length?'Review required':'No scheduling conflicts detected'}</strong> · ${a.matchCount} matches checked. Advisory notes are not a substitute for reviewing officials, court flow, and tournament rules.</div>
+ ${a.issues.length?`<p><strong>Conflicts</strong></p><ul>${a.issues.map(s=>`<li>${esc(s)}</li>`).join('')}</ul>`:''}
+ ${a.warnings.length?`<p><strong>Advisories</strong></p><ul>${a.warnings.map(s=>`<li>${esc(s)}</li>`).join('')}</ul>`:''}
+ <div style="overflow-x:auto"><table><thead><tr><th>Team (A–Z)</th><th>Pool matches</th></tr></thead><tbody>${a.counts.map(t=>`<tr><td>${esc(t.name)}</td><td>${t.count}</td></tr>`).join('')}</tbody></table></div>
+ <p><strong>Matches per court</strong></p><div class="row">${a.usage.map(c=>`<span class="tag">${esc(c.name)}: ${c.count}</span>`).join('')}</div>
+ <p class="note">Read-only check of the ${esc(rows===draftScheduleWorkspace?.preview?'previewed':'saved')} schedule. Results are not written to Supabase; approved scores and the legacy event are unaffected.</p></details>`;
+}
 function draftSchedulePanel(){
  const w=draftScheduleWorkspace;if(!w)return '';
  const event=eventCatalog.items.find(e=>e.id===w.eventId);
@@ -419,6 +461,7 @@ function draftSchedulePanel(){
  <p class="mini">Event: ${esc(w.eventId)} · Competition revision: ${Number(w.revision)} · ${w.saved.length} saved matches</p>
  ${!w.configMatched?'<div class="notice bad">Draft configuration differs from competition storage. Sync it first, then reopen schedule preparation.</div>':''}
  ${w.storage.reports||w.storage.snapshot_reports?'<div class="notice bad">Score reports exist: schedule changes disabled.</div>':''}
+ ${rows.length?rc9AuditPanel(rows,w.config):''}
  ${rows.length?`<div style="overflow-x:auto"><table><thead><tr><th>Start</th><th>Court</th><th>Match</th></tr></thead><tbody>${rows.map(m=>`<tr><td>${esc(m.slot)}</td><td>${esc(w.config.courts[m.court]||'Court '+(m.court+1))}</td><td>${esc(m.home_name||w.config.teams.find(t=>t.id===m.home)?.name||m.home)} vs ${esc(m.away_name||w.config.teams.find(t=>t.id===m.away)?.name||m.away)}</td></tr>`).join('')}</tbody></table></div>`:'<p class="note">No schedule saved or generated yet.</p>'}
  <div class="row">${safe?'<button class="btn" id="draftScheduleGenerate">Preview pool schedule</button>':''}${safe&&w.preview?'<button class="btn primary" id="draftScheduleSave">Save this draft schedule</button>':''}<button class="btn" id="draftScheduleReload">Reload stored schedule</button><button class="btn" id="draftScheduleClose">Close</button></div>
  <p class="note">A schedule can be saved only when the event is an inactive draft and its revisions are unchanged. A previously saved draft schedule can be replaced while there are no reports.</p></div>`;
@@ -1180,7 +1223,7 @@ function nav(){
  if(!opts.some(x=>x[0]===tab))tab=opts[0][0];
  return `<nav class="tabs" aria-label="Main navigation">${opts.map(([k,n,ico])=>`<button data-tab="${k}" class="${tab===k?'selected':''}" ${tab===k?'aria-current="page"':''}><span class="navico" aria-hidden="true">${ico}</span>${n}</button>`).join('')}</nav>`;
 }
-function header(){return `<div class="top"><div class="shell" style="padding-bottom:0"><div class="toprow"><div><div class="brand"><span class="brand-mark">♛</span>${esc(S.title)}</div><div class="subtitle">SOVEREIGN SPORTS · V8.6.0 RC8 ${liveMode?'LIVE':'PRACTICE'} · ${esc(mode.toUpperCase())}</div></div><select id="modeSelect" aria-label="Switch app role" style="width:auto;min-width:112px" ${liveMode&&refSecret?'disabled':''}>${MODES.map(m=>`<option value="${m}" ${m===mode?'selected':''}>${m[0].toUpperCase()+m.slice(1)}</option>`).join('')}</select></div>${nav()}</div></div>`}
+function header(){return `<div class="top"><div class="shell" style="padding-bottom:0"><div class="toprow"><div><div class="brand"><span class="brand-mark">♛</span>${esc(S.title)}</div><div class="subtitle">SOVEREIGN SPORTS · V8.6.0 RC9 ${liveMode?'LIVE':'PRACTICE'} · ${esc(mode.toUpperCase())}</div></div><select id="modeSelect" aria-label="Switch app role" style="width:auto;min-width:112px" ${liveMode&&refSecret?'disabled':''}>${MODES.map(m=>`<option value="${m}" ${m===mode?'selected':''}>${m[0].toUpperCase()+m.slice(1)}</option>`).join('')}</select></div>${nav()}</div></div>`}
 function matchCard(m,options={}){if(m.stage==='playoff' && m.autoWinner && !m.away){return `<div class="match bye-card"><div class="row"><strong>Semifinal qualification</strong><span class="tag">BYE · ADVANCED</span></div><div class="team"><strong>${esc(team(m.autoWinner))}</strong></div><div class="mini">Earned a semifinal bye · Automatically advances to the next round. No court, official, or score required.</div></div>`}const result=winner(m),finalized=isDone(m);return `<div class="match"><div class="row"><strong style="color:var(--gold)">${esc(matchLabel(m))}</strong><span class="tag">${finalized?'Final':m.autoWinner?'Bye':'Scheduled'}</span></div><div class="team"><span>${esc(team(m.home))}</span><span class="score">${finalized?m.sets.filter(x=>x[0]>x[1]).length:'—'}</span></div><div class="team"><span>${esc(team(m.away))}</span><span class="score">${finalized?m.sets.filter(x=>x[1]>x[0]).length:'—'}</span></div><div class="mini">${finalized?esc(scoreText(m))+(result?' · Winner: '+esc(team(result)):' · Split 1–1 (no match winner)'):m.autoWinner?'Auto-advance: '+esc(team(m.autoWinner)):m.official?`Ref: ${esc(official(m.official))}`:'Referee not assigned'}${m.lineTeam?' · Lines: '+esc(team(m.lineTeam)):''}</div>${options.edit?`<div class="actions" style="margin-top:12px"><button class="btn" data-score="${esc(m.id)}">${result?'Correct Result':'Enter Result'}</button><button class="btn ghost" data-assign="${esc(m.id)}">Assign</button><button class="btn ghost" data-forfeit="${esc(m.id)}">Forfeit</button></div>`:''}${options.ref?`<button class="btn primary" style="width:100%;margin-top:12px" data-refscore="${esc(m.id)}">Report score</button>`:''}</div>`}
 function official(id){if(id.startsWith('team:'))return team(id.slice(5));return S.refs.find(x=>x.id===id)?.name||'Unassigned'}
 function home(){const issues=validate(),errors=issues.filter(x=>x.level==='error').length,completed=S.matches.filter(isDone).length;return `${S.status==='completed'?`<div class="notice good"><strong>🏆 Tournament complete.</strong> ${tournamentChampion()?`Champions: ${esc(team(tournamentChampion()))}`:'Review championship result.'} · Results preserved.</div>${championPanel()}`:tournamentChampion()?`<div class="notice good"><strong>🏆 Championship winner: ${esc(team(tournamentChampion()))}.</strong> Use Finish Tournament in Setup after confirming all score approvals. The final public display will announce the champions.</div>`:''}${clockPanel()}<div class="app-intro"><div class="app-eyebrow">DIRECTOR DASHBOARD</div><h1 class="app-heading">Your tournament, at a glance.</h1><p class="app-subheading">Everything you need in a tap.</p></div><div class="stats"><div class="stat"><strong>${S.teams.length}</strong><small>Teams</small></div><div class="stat"><strong>${S.settings.courts}</strong><small>Courts</small></div><div class="stat"><strong>${completed}/${S.matches.filter(m=>m.slot!=='BYE').length}</strong><small>Matches final</small></div><div class="stat"><strong>${pendingCount()}</strong><small>Awaiting approval</small></div></div><div class="panel"><h2>Next action</h2><p class="note">${pendingCount()?pendingCount()+' score report(s) awaiting review.':!S.matches.length?'Configure your teams and generate the schedule in Prepare.':!allPoolsDone()?'Continue pool matches and approve each submitted score.':!S.matches.some(m=>m.stage==='playoff')?'Pool results complete. Generate your playoff bracket from Matches & Scores.':tournamentChampion()?'Championship results recorded. Review and finish the event when ready.':'Continue bracket rounds and approve scores before advancing.'}</p><div class="actions"><button class="btn primary" data-tab="matches">Matches & Scores</button><button class="btn" data-tab="bracket">Bracket</button></div></div>${!liveMode?`<div class="panel"><h2>Local practice tools</h2><p class="note">Only affects data stored on this device. Live tournament cloud data is unchanged.</p><div class="quick-actions"><button class="btn primary" id="practiceStart">▶ Start Practice Tournament</button><button class="btn" id="practiceRef">✎ Try Referee Mode</button><button class="btn ghost" id="practiceReset">Reset Local Practice</button></div></div>`:``}<div class="panel"><h2>Schedule status</h2><p class="note">${errors?'There are '+errors+' critical issue(s) to resolve before publishing.':'No critical scheduling conflicts detected.'} ${issues.length-errors} additional warnings or advisories.</p><button class="btn primary" data-tab="safety">Open Safety Check →</button> <span class="tag">${esc(S.status.toUpperCase())}</span></div>${reportQueue()}<div class="panel"><h2>Up next · automatic court board</h2>${nextUp().map(x=>matchCard(x,{edit:true})).join('')||'<p class="note">Generate a match schedule to get started.</p>'}</div>`}
