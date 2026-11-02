@@ -463,6 +463,35 @@ function rc9AuditPanel(rows,config){
  <p><strong>Matches per court</strong></p><div class="row">${a.usage.map(c=>`<span class="tag">${esc(c.name)}: ${c.count}</span>`).join('')}</div>
  <p class="note">Read-only check of the ${esc(rows===draftScheduleWorkspace?.preview?'previewed':'saved')} schedule. Results are not written to Supabase; approved scores and the legacy event are unaffected.</p></details>`;
 }
+// RC10: Read-only bracket structure preview. No data writes, score assumptions, or seed assignment.
+function rc10PlayoffPlan(config){
+ const teamCount=(config?.teams||[]).length;
+ const requested=Number(config?.settings?.playoff||teamCount);
+ const advancing=Math.min(teamCount,Math.max(2,Math.floor(requested)));
+ if(!Number.isFinite(advancing)||advancing<2)return {error:'At least two advancing teams are required.'};
+ const size=2**Math.ceil(Math.log2(advancing));
+ const seedOrder=n=>{let a=[1,2];while(a.length<n){const next=a.length*2;a=a.flatMap(v=>[v,next+1-v]);}return a};
+ const positions=seedOrder(size);
+ const slots=positions.map(seed=>seed<=advancing?'Seed '+seed:null);
+ const first=[];let games=0,byes=0;
+ for(let i=0;i<slots.length;i+=2){
+  let a=slots[i],b=slots[i+1];
+  if(a&&b){games++;first.push({label:a+' vs '+b,type:'match'});}
+  else if(a||b){byes++;first.push({label:(a||b)+' advances by bye',type:'bye'});}
+ }
+ const rounds=Math.log2(size);
+ return {advancing,size,eliminated:teamCount-advancing,rounds,first,games:advancing-1,byes,firstRoundGames:games};
+}
+function rc10BracketPanel(config){
+ const p=rc10PlayoffPlan(config);
+ if(p.error)return `<div class="notice bad">${esc(p.error)}</div>`;
+ return `<details class="setup-fold"><summary>Playoff bracket plan · ${p.advancing} advance · ${p.games} matches</summary>
+  <div class="notice">Read-only bracket structure. Seeds are placeholders until pool results are approved. No playoff matches, referee assignments, or scoring credentials are created.</div>
+  <p class="mini">${p.advancing} teams advance · ${p.eliminated} eliminated after pool · ${p.size}-slot bracket · ${p.rounds} rounds · ${p.byes} first-round byes · ${p.games} total playable matches</p>
+  <p><strong>Opening round</strong></p><ol>${p.first.map(x=>`<li>${esc(x.label)}</li>`).join('')}</ol>
+  <p class="note">The competition settings determine the number advancing. Actual seeding, future-round winners, court assignments and match times are not yet generated.</p>
+ </details>`;
+}
 function draftSchedulePanel(){
  const w=draftScheduleWorkspace;if(!w)return '';
  const event=eventCatalog.items.find(e=>e.id===w.eventId);
@@ -474,6 +503,7 @@ function draftSchedulePanel(){
  ${!w.configMatched?'<div class="notice bad">Draft configuration differs from competition storage. Sync it first, then reopen schedule preparation.</div>':''}
  ${w.storage.reports||w.storage.snapshot_reports?'<div class="notice bad">Score reports exist: schedule changes disabled.</div>':''}
  ${rows.length?rc9AuditPanel(rows,w.config):''}
+ ${rc10BracketPanel(w.config)}
  ${rows.length?`<div style="overflow-x:auto"><table><thead><tr><th>Start</th><th>Court</th><th>Match</th></tr></thead><tbody>${rows.map(m=>`<tr><td>${esc(m.slot)}</td><td>${esc(w.config.courts[m.court]||'Court '+(m.court+1))}</td><td>${esc(m.home_name||w.config.teams.find(t=>t.id===m.home)?.name||m.home)} vs ${esc(m.away_name||w.config.teams.find(t=>t.id===m.away)?.name||m.away)}</td></tr>`).join('')}</tbody></table></div>`:'<p class="note">No schedule saved or generated yet.</p>'}
  <div class="row">${safe?'<button class="btn" id="draftScheduleGenerate">Preview pool schedule</button>':''}${safe&&w.preview?'<button class="btn primary" id="draftScheduleSave">Save this draft schedule</button>':''}<button class="btn" id="draftScheduleReload">Reload stored schedule</button><button class="btn" id="draftScheduleClose">Close</button></div>
  <p class="note">A schedule can be saved only when the event is an inactive draft and its revisions are unchanged. A previously saved draft schedule can be replaced while there are no reports.</p></div>`;
@@ -1235,7 +1265,7 @@ function nav(){
  if(!opts.some(x=>x[0]===tab))tab=opts[0][0];
  return `<nav class="tabs" aria-label="Main navigation">${opts.map(([k,n,ico])=>`<button data-tab="${k}" class="${tab===k?'selected':''}" ${tab===k?'aria-current="page"':''}><span class="navico" aria-hidden="true">${ico}</span>${n}</button>`).join('')}</nav>`;
 }
-function header(){return `<div class="top"><div class="shell" style="padding-bottom:0"><div class="toprow"><div><div class="brand"><span class="brand-mark">♛</span>${esc(S.title)}</div><div class="subtitle">SOVEREIGN SPORTS · V8.6.0 RC9a ${liveMode?'LIVE':'PRACTICE'} · ${esc(mode.toUpperCase())}</div></div><select id="modeSelect" aria-label="Switch app role" style="width:auto;min-width:112px" ${liveMode&&refSecret?'disabled':''}>${MODES.map(m=>`<option value="${m}" ${m===mode?'selected':''}>${m[0].toUpperCase()+m.slice(1)}</option>`).join('')}</select></div>${nav()}</div></div>`}
+function header(){return `<div class="top"><div class="shell" style="padding-bottom:0"><div class="toprow"><div><div class="brand"><span class="brand-mark">♛</span>${esc(S.title)}</div><div class="subtitle">SOVEREIGN SPORTS · V8.6.0 RC10 ${liveMode?'LIVE':'PRACTICE'} · ${esc(mode.toUpperCase())}</div></div><select id="modeSelect" aria-label="Switch app role" style="width:auto;min-width:112px" ${liveMode&&refSecret?'disabled':''}>${MODES.map(m=>`<option value="${m}" ${m===mode?'selected':''}>${m[0].toUpperCase()+m.slice(1)}</option>`).join('')}</select></div>${nav()}</div></div>`}
 function matchCard(m,options={}){if(m.stage==='playoff' && m.autoWinner && !m.away){return `<div class="match bye-card"><div class="row"><strong>Semifinal qualification</strong><span class="tag">BYE · ADVANCED</span></div><div class="team"><strong>${esc(team(m.autoWinner))}</strong></div><div class="mini">Earned a semifinal bye · Automatically advances to the next round. No court, official, or score required.</div></div>`}const result=winner(m),finalized=isDone(m);return `<div class="match"><div class="row"><strong style="color:var(--gold)">${esc(matchLabel(m))}</strong><span class="tag">${finalized?'Final':m.autoWinner?'Bye':'Scheduled'}</span></div><div class="team"><span>${esc(team(m.home))}</span><span class="score">${finalized?m.sets.filter(x=>x[0]>x[1]).length:'—'}</span></div><div class="team"><span>${esc(team(m.away))}</span><span class="score">${finalized?m.sets.filter(x=>x[1]>x[0]).length:'—'}</span></div><div class="mini">${finalized?esc(scoreText(m))+(result?' · Winner: '+esc(team(result)):' · Split 1–1 (no match winner)'):m.autoWinner?'Auto-advance: '+esc(team(m.autoWinner)):m.official?`Ref: ${esc(official(m.official))}`:'Referee not assigned'}${m.lineTeam?' · Lines: '+esc(team(m.lineTeam)):''}</div>${options.edit?`<div class="actions" style="margin-top:12px"><button class="btn" data-score="${esc(m.id)}">${result?'Correct Result':'Enter Result'}</button><button class="btn ghost" data-assign="${esc(m.id)}">Assign</button><button class="btn ghost" data-forfeit="${esc(m.id)}">Forfeit</button></div>`:''}${options.ref?`<button class="btn primary" style="width:100%;margin-top:12px" data-refscore="${esc(m.id)}">Report score</button>`:''}</div>`}
 function official(id){if(id.startsWith('team:'))return team(id.slice(5));return S.refs.find(x=>x.id===id)?.name||'Unassigned'}
 function home(){const issues=validate(),errors=issues.filter(x=>x.level==='error').length,completed=S.matches.filter(isDone).length;return `${S.status==='completed'?`<div class="notice good"><strong>🏆 Tournament complete.</strong> ${tournamentChampion()?`Champions: ${esc(team(tournamentChampion()))}`:'Review championship result.'} · Results preserved.</div>${championPanel()}`:tournamentChampion()?`<div class="notice good"><strong>🏆 Championship winner: ${esc(team(tournamentChampion()))}.</strong> Use Finish Tournament in Setup after confirming all score approvals. The final public display will announce the champions.</div>`:''}${clockPanel()}<div class="app-intro"><div class="app-eyebrow">DIRECTOR DASHBOARD</div><h1 class="app-heading">Your tournament, at a glance.</h1><p class="app-subheading">Everything you need in a tap.</p></div><div class="stats"><div class="stat"><strong>${S.teams.length}</strong><small>Teams</small></div><div class="stat"><strong>${S.settings.courts}</strong><small>Courts</small></div><div class="stat"><strong>${completed}/${S.matches.filter(m=>m.slot!=='BYE').length}</strong><small>Matches final</small></div><div class="stat"><strong>${pendingCount()}</strong><small>Awaiting approval</small></div></div><div class="panel"><h2>Next action</h2><p class="note">${pendingCount()?pendingCount()+' score report(s) awaiting review.':!S.matches.length?'Configure your teams and generate the schedule in Prepare.':!allPoolsDone()?'Continue pool matches and approve each submitted score.':!S.matches.some(m=>m.stage==='playoff')?'Pool results complete. Generate your playoff bracket from Matches & Scores.':tournamentChampion()?'Championship results recorded. Review and finish the event when ready.':'Continue bracket rounds and approve scores before advancing.'}</p><div class="actions"><button class="btn primary" data-tab="matches">Matches & Scores</button><button class="btn" data-tab="bracket">Bracket</button></div></div>${!liveMode?`<div class="panel"><h2>Local practice tools</h2><p class="note">Only affects data stored on this device. Live tournament cloud data is unchanged.</p><div class="quick-actions"><button class="btn primary" id="practiceStart">▶ Start Practice Tournament</button><button class="btn" id="practiceRef">✎ Try Referee Mode</button><button class="btn ghost" id="practiceReset">Reset Local Practice</button></div></div>`:``}<div class="panel"><h2>Schedule status</h2><p class="note">${errors?'There are '+errors+' critical issue(s) to resolve before publishing.':'No critical scheduling conflicts detected.'} ${issues.length-errors} additional warnings or advisories.</p><button class="btn primary" data-tab="safety">Open Safety Check →</button> <span class="tag">${esc(S.status.toUpperCase())}</span></div>${reportQueue()}<div class="panel"><h2>Up next · automatic court board</h2>${nextUp().map(x=>matchCard(x,{edit:true})).join('')||'<p class="note">Generate a match schedule to get started.</p>'}</div>`}
