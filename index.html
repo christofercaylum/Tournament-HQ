@@ -87,7 +87,7 @@
 const KEY='hc-v4-release-state',CONFIG='hc-v4-release-cloud',MODES=['director','referee','captain','display'];const $=id=>document.getElementById(id);const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));const copy=o=>JSON.parse(JSON.stringify(o));const uid=()=>crypto.randomUUID?.()||String(Date.now()+Math.random());
 const hqEntryParams=new URLSearchParams(location.search);
 const hqCredentialTarget=hqEntryParams.get('event')||'';
-const hqPublicTarget=(['captain','display'].includes(hqEntryParams.get('mode'))&&!hqEntryParams.has('ref')&&!hqEntryParams.has('court_token'))?hqCredentialTarget:'';
+let hqPublicTarget=(['captain','display'].includes(hqEntryParams.get('mode'))&&!hqEntryParams.has('ref')&&!hqEntryParams.has('court_token'))?hqCredentialTarget:'';
 let hqPublicLoaded=false,hqPublicError='',hqPublicInFlight=false,hqPublicTimer=null;
 let hqCredentialVerified=false;
 let hqCredentialEventId='';
@@ -1698,7 +1698,8 @@ async function hqCommitSelectedMetadata(operation=tab){
 // Harmless, local-only interface actions must not be suppressed by the
 // protection layer. Saving operations remain explicitly allowlisted below.
 function hqReadOnlySelectedControl(el){
- if(el.matches('select#modeSelect'))return mode==='director' && !refSecret && !courtSecret && !hqPublicTarget;
+ if(el.matches('select#modeSelect'))return !refSecret && !courtSecret && (mode==='director' || mode==='captain' || mode==='display');
+ if(el.matches('a#hqReturnDirectorView'))return (mode==='captain'||mode==='display') && !refSecret && !courtSecret;
  if(el.matches('button#hqNewEvent,button#hqManageEvents,button#hqOpenResetManager,button#hqEventsRefresh'))return !!client&&!!session&&cloudRole==='director'&&mode==='director';
  if(el.matches('button[data-tab],button[data-group],button#toggleDone,button#dxRefreshApprovals,button#runValidation,button#export,button#exportCsv,button#nextSlide,button#fullscreen,button#enableClockSound'))return true;
  if(el.matches('select#recoveryMatch,select#captainTeam'))return true;
@@ -2338,7 +2339,7 @@ async function hqSaveSchedulePreview(){
    }
  }finally{hqSelectedSaving=false;render();}
 }
-function header(){const canSelect=mode==='director'&&!refSecret&&!courtSecret;return `<div class="top"><div class="shell" style="padding-bottom:0"><div class="toprow"><div><div class="brand"><span class="brand-mark">♛</span>Sovereign Sports Tournament HQ</div><div class="subtitle">${mode==='director'?'Director Workspace · '+esc(S.title):esc(S.title)+' · '+(liveMode?'Connected':'Practice')+' · '+esc(mode.toUpperCase())}</div></div><select id="modeSelect" aria-label="Switch app role" style="width:auto;min-width:112px" ${(refSecret||courtSecret)?'disabled':''}>${MODES.map(m=>`<option value="${m}" ${m===mode?'selected':''}>${m[0].toUpperCase()+m.slice(1)}</option>`).join('')}</select></div>${hqPublicTarget?`<div class="row" style="justify-content:flex-end;padding-top:7px"><button type="button" id="hqReturnDirectorView" class="btn ghost" style="min-height:38px;padding:6px 12px">← Director Dashboard</button></div>`:''}${canSelect?`<div class="hq-event-bar"><label for="hqEventSelector">Event</label><select id="hqEventSelector" aria-label="Select tournament">${eventCatalogOptions()}</select><button class="btn hq-event-refresh" id="hqEventRefresh" type="button" aria-label="Refresh events" title="Refresh event list">↻ <span>Refresh</span></button><span class="hq-event-note">${esc(!liveMode?'Practice mode':!session?'Sign in to manage events':cloudRole==='director'?'Director access':cloudRole==='assistant'?'Assistant access':'Read-only access')}</span></div>`:''}${nav()}</div></div>`}
+function header(){const canSelect=mode==='director'&&!refSecret&&!courtSecret;return `<div class="top"><div class="shell" style="padding-bottom:0"><div class="toprow"><div><div class="brand"><span class="brand-mark">♛</span>Sovereign Sports Tournament HQ</div><div class="subtitle">${mode==='director'?'Director Workspace · '+esc(S.title):esc(S.title)+' · '+(liveMode?'Connected':'Practice')+' · '+esc(mode.toUpperCase())}</div></div><select id="modeSelect" aria-label="Switch app role" style="width:auto;min-width:112px" ${(refSecret||courtSecret)?'disabled':''}>${MODES.map(m=>`<option value="${m}" ${m===mode?'selected':''}>${m[0].toUpperCase()+m.slice(1)}</option>`).join('')}</select></div>${(mode==='captain'||mode==='display')&&!refSecret&&!courtSecret?`<div class="row" style="justify-content:flex-end;padding-top:7px"><a href="${esc(hqDirectorHomeUrl())}" id="hqReturnDirectorView" class="btn ghost" style="min-height:38px;padding:6px 12px;text-decoration:none">← Director Dashboard</a></div>`:''}${canSelect?`<div class="hq-event-bar"><label for="hqEventSelector">Event</label><select id="hqEventSelector" aria-label="Select tournament">${eventCatalogOptions()}</select><button class="btn hq-event-refresh" id="hqEventRefresh" type="button" aria-label="Refresh events" title="Refresh event list">↻ <span>Refresh</span></button><span class="hq-event-note">${esc(!liveMode?'Practice mode':!session?'Sign in to manage events':cloudRole==='director'?'Director access':cloudRole==='assistant'?'Assistant access':'Read-only access')}</span></div>`:''}${nav()}</div></div>`}
 function matchCard(m,options={}){if(m.stage==='playoff' && m.autoWinner && !m.away){return `<div class="match bye-card"><div class="row"><strong>Semifinal qualification</strong><span class="tag">BYE · ADVANCED</span></div><div class="team"><strong>${esc(team(m.autoWinner))}</strong></div><div class="mini">Earned a semifinal bye · Automatically advances to the next round. No court, official, or score required.</div></div>`}const result=winner(m),finalized=isDone(m);return `<div class="match"><div class="row"><strong style="color:var(--gold)">${esc(matchLabel(m))}</strong><span class="tag">${finalized?'Final':m.autoWinner?'Bye':'Scheduled'}</span></div><div class="team"><span>${esc(team(m.home))}</span><span class="score">${finalized?m.sets.filter(x=>x[0]>x[1]).length:'—'}</span></div><div class="team"><span>${esc(team(m.away))}</span><span class="score">${finalized?m.sets.filter(x=>x[1]>x[0]).length:'—'}</span></div><div class="mini">${finalized?esc(scoreText(m))+(result?' · Winner: '+esc(team(result)):' · Split 1–1 (no match winner)'):m.autoWinner?'Auto-advance: '+esc(team(m.autoWinner)):m.official?`Ref: ${esc(official(m.official))}`:'Referee not assigned'}${m.lineTeam?' · Lines: '+esc(team(m.lineTeam)):''}</div>${options.edit?`<div class="actions" style="margin-top:12px"><button class="btn" data-score="${esc(m.id)}">${result?'Correct Result':'Enter Result'}</button><button class="btn ghost" data-assign="${esc(m.id)}">Assign</button><button class="btn ghost" data-forfeit="${esc(m.id)}">Forfeit</button></div>`:''}${options.ref?`<button class="btn primary" style="width:100%;margin-top:12px" data-refscore="${esc(m.id)}">Report score</button>`:''}</div>`}
 function official(id){if(id.startsWith('team:'))return team(id.slice(5));return S.refs.find(x=>x.id===id)?.name||'Unassigned'}
 function home(){if(mode==='director')return dxHomeDashboard();const issues=validate(),errors=issues.filter(x=>x.level==='error').length,completed=S.matches.filter(isDone).length;return `${S.status==='completed'?`<div class="notice good"><strong>🏆 Tournament complete.</strong> ${tournamentChampion()?`Champions: ${esc(team(tournamentChampion()))}`:'Review championship result.'} · Results preserved.</div>${championPanel()}`:tournamentChampion()?`<div class="notice good"><strong>🏆 Championship winner: ${esc(team(tournamentChampion()))}.</strong> Use Finish Tournament in Setup after confirming all score approvals. The final public display will announce the champions.</div>`:''}${clockPanel()}<div class="app-intro"><div class="app-eyebrow">DIRECTOR DASHBOARD</div><h1 class="app-heading">Your tournament, at a glance.</h1><p class="app-subheading">Everything you need in a tap.</p></div><div class="stats"><div class="stat"><strong>${S.teams.length}</strong><small>Teams</small></div><div class="stat"><strong>${S.settings.courts}</strong><small>Courts</small></div><div class="stat"><strong>${completed}/${S.matches.filter(m=>m.slot!=='BYE').length}</strong><small>Matches final</small></div><div class="stat"><strong>${pendingCount()}</strong><small>Awaiting approval</small></div></div><div class="panel ux-next"><h2>Next step</h2>${(()=>{const pending=pendingCount();const scheduled=S.matches.length>0;const done=S.status==='completed';const champion=!!tournamentChampion();let line='',primary='setup',label='Prepare event',secondary='';
@@ -2640,6 +2641,8 @@ async function hqLoadScopedPublic(){
  hqPublicInFlight=true;
  try{
    const {data,error}=await client.rpc('hq_multi_public_view',{p_event_id:target});
+   // A pending public response must never re-enter public mode after Director return.
+   if(hqPublicTarget!==target || mode==='director')return;
    if(error)throw Error(error.message||'Public event is unavailable');
    const state=hqPublicState(data);
    if(!state||!Array.isArray(state.teams)||!Array.isArray(state.matches)||
@@ -2653,11 +2656,12 @@ async function hqLoadScopedPublic(){
    S=hqSafeDisplayState(state,title,data?.version??0);
    hqPublicLoaded=true;hqPublicError='';sync='Public event synced';
  }catch(e){
+   if(hqPublicTarget!==target || mode==='director')return;
    hqPublicError='Unable to refresh this tournament: '+(e?.message||String(e));
    // If this event was previously loaded, retain only its same-event last good
    // public snapshot, but display a warning. Never fall back to Harvest Crown.
    if(!hqPublicLoaded){S=defaults();S.title='Tournament unavailable';S.teams=[];S.matches=[];S.refs=[];S.courts=[];S.sponsors=[];}
- }finally{hqPublicInFlight=false;render();}
+ }finally{hqPublicInFlight=false;if(hqPublicTarget===target&&mode!=='director')render();}
 }
 async function hqInitializeScopedCredential(){
  if(!refSecret&&!courtSecret)return false;
@@ -2923,7 +2927,45 @@ function hqDirectorHomeUrl(){
  // The Director page independently verifies Supabase authorization.
  return location.origin+location.pathname;
 }
-function hqReturnToDirector(){location.assign(hqDirectorHomeUrl());}
+async function hqReturnToDirector(event){
+  // Public view and Director workspace share a page, but independent-event
+  // public pages use their own read-only boot path. Return without another
+  // public boot or relying on a service-worker/browser reload.
+  if(event?.preventDefault)event.preventDefault();
+  // render() deliberately skips updates while an input/select has focus.
+  // Release the role selector before changing workspaces.
+  if(document.activeElement?.id==='modeSelect')document.activeElement.blur();
+  if(refSecret||courtSecret)return;
+  const homeUrl=hqDirectorHomeUrl();
+  history.replaceState({},'',homeUrl);
+  if(hqPublicTimer){clearInterval(hqPublicTimer);hqPublicTimer=null;}
+  hqPublicTarget='';hqPublicInFlight=false;hqPublicLoaded=false;hqPublicError='';
+  hqInspectedId='legacy';hqEventPreview=null;hqLegacySnapshot=null;
+  hqDraftSchedulePreview=null;hqSelectedMessage='';pending=[];hqPendingError='';
+  mode='director';tab='home';S=load();notice='';
+  // The public QR can supply a project URL/key without changing saved
+  // Director configuration. Use the Director's saved connection on return.
+  const savedCloud=JSON.parse(localStorage.getItem(CONFIG)||'null');
+  if(savedCloud?.url&&savedCloud?.key &&
+     (!cloud||cloud.url!==savedCloud.url||cloud.key!==savedCloud.key)){
+    cloud=savedCloud;client=null;session=null;cloudRole='viewer';
+  }
+  render();
+  try{
+    if(!client && cloud?.url && cloud?.key){await initCloud();return;}
+    if(client){
+      // Public boot skips normal Director initialization. Recheck the
+      // account, then load the event catalog without switching event.
+      const result=await client.auth.getSession();
+      session=result?.data?.session||null;
+      await hqRefreshAccountRole();
+      if(session&&cloudRole==='director')await hqCatalogReload();
+    }
+  }catch(err){
+    notice='Director cloud connection needs attention. Open Administration to sign in.';
+  }
+  render();
+}
 function publicLink(kind){
  const u=new URL(location.origin+location.pathname);
  if(u.protocol!=='https:'){alert('Open Tournament HQ on its published HTTPS website before printing QR signs.');return null}
@@ -3225,7 +3267,7 @@ function dl(name,data,type='application/json'){let a=document.createElement('a')
 function bind(){if($('hqReturnDirectorView'))$('hqReturnDirectorView').onclick=hqReturnToDirector;if($('hqEventSelector'))$('hqEventSelector').onchange=e=>{e.target.blur();hqInspectEvent(e.target.value)};if($('hqEventRefresh'))$('hqEventRefresh').onclick=()=>hqCatalogReload();if($('hqNewEvent'))$('hqNewEvent').onclick=hqNewEventDialog;if($('hqManageEvents'))$('hqManageEvents').onclick=hqManageEventDialog;if($('hqOpenResetManager'))$('hqOpenResetManager').onclick=hqManageEventDialog;if($('hqEventsRefresh'))$('hqEventsRefresh').onclick=()=>hqCatalogReload();if($('dxRefreshApprovals'))$('dxRefreshApprovals').onclick=()=>{if(hqViewingSelected())void hqRefreshSelectedPending();else void pollReports();};if($('hqReturnLegacy'))$('hqReturnLegacy').onclick=()=>hqInspectEvent('legacy');if($('hqScheduleSave'))$('hqScheduleSave').onclick=hqSaveSchedulePreview;if($('hqScheduleCancel'))$('hqScheduleCancel').onclick=hqDiscardSchedulePreview;document.querySelectorAll('[data-tr-link]').forEach(b=>b.onclick=async()=>{await rosterLoad();teamRegLink(b.dataset.trLink)});document.querySelectorAll('[data-tr-review]').forEach(b=>b.onclick=()=>teamRegReview(b.dataset.trReview));document.querySelectorAll('[data-roster-preview]').forEach(b=>b.onclick=()=>registrationRosterPreview(b.dataset.rosterPreview));document.querySelectorAll('[data-roster-import]').forEach(b=>b.onclick=async()=>{await rosterLoad();registrationRosterImport(b.dataset.rosterImport)});document.querySelectorAll('[data-tr-edit]').forEach(b=>b.onclick=()=>teamRegEdit(b.dataset.trEdit));if($('trRefresh'))$('trRefresh').onclick=teamRegLoad;if($('readinessRefresh'))$('readinessRefresh').onclick=async()=>{await Promise.all([teamRegLoad(),rosterLoad(),waiverLoad()]);render()};if($('readinessSaveMinimum'))$('readinessSaveMinimum').onclick=()=>{const n=Number($('readinessMinimum').value);if(!Number.isInteger(n)||n<1||n>30)return alert('Choose a minimum from 1 to 30 players.');S.settings.rosterMinimum=n;local();};document.querySelectorAll('[data-waiver-review]').forEach(b=>b.onclick=()=>waiverReviewForm(b.dataset.waiverReview));if($('waiverBatch'))$('waiverBatch').onclick=waiverBatchReview;if($('jfCommit'))$('jfCommit').onclick=jotformCommit;if($('jfClose'))$('jfClose').onclick=()=>{jfPreview={formId:'',rows:[],error:'',loading:false};render()};document.querySelectorAll('[data-jf-preview]').forEach(b=>b.onclick=()=>jotformPreview(Number(b.dataset.jfPreview)));if($('connectionAdd'))$('connectionAdd').onclick=()=>connectionModal();if($('connectionRefresh'))$('connectionRefresh').onclick=connectionLoad;document.querySelectorAll('[data-conn-edit]').forEach(b=>b.onclick=()=>connectionModal(Number(b.dataset.connEdit)));document.querySelectorAll('[data-conn-remove]').forEach(b=>b.onclick=()=>connectionRemove(Number(b.dataset.connRemove)));if($('rosterAdd'))$('rosterAdd').onclick=()=>rosterModal();if($('rosterReload'))$('rosterReload').onclick=async()=>{await rosterLoad();await waiverLoad()};if($('dirSearch')){const search=$('dirSearch');search.oninput=e=>{directoryQuery=e.target.value;updateDirectorySuggestions()};search.onkeydown=e=>{if(e.key==='Enter'){e.preventDefault();const first=$('dirSuggestions')?.querySelector('[data-dir-pick]');if(first)directoryPick(first.dataset.dirPick)}else if(e.key==='Escape'){directoryQuery='';search.value='';updateDirectorySuggestions()}};}if($('dirSuggestions'))$('dirSuggestions').onclick=e=>{const b=e.target.closest('[data-dir-pick]');if(b)directoryPick(b.dataset.dirPick)};if($('dirClearSelection'))$('dirClearSelection').onclick=()=>{directorySelectedId='';render();$('dirSearch')?.focus()};document.querySelectorAll('[data-dir-view]').forEach(b=>b.onclick=()=>{directoryView=b.dataset.dirView;render()});document.querySelectorAll('[data-roster-edit]').forEach(b=>b.onclick=()=>rosterModal(b.dataset.rosterEdit));document.querySelectorAll('[data-dir-assign]').forEach(b=>b.onclick=()=>directoryAssign(b.dataset.dirAssign));document.querySelectorAll('[data-dir-addteam]').forEach(b=>b.onclick=()=>directoryAssign('',b.dataset.dirAddteam));document.querySelectorAll('[data-dir-unassign]').forEach(b=>b.onclick=()=>directoryUnassign(b.dataset.dirUnassign));document.querySelectorAll('[data-dir-delete]').forEach(b=>b.onclick=()=>directoryDelete(b.dataset.dirDelete));if($('recoveryMatch'))$('recoveryMatch').onchange=e=>{recoverySelectedMatch=e.target.value;render()};if($('saveFormat'))$('saveFormat').onclick=saveFormat;document.querySelectorAll('[data-load-format]').forEach(b=>b.onclick=()=>loadFormat(b.dataset.loadFormat));document.querySelectorAll('[data-rename-format]').forEach(b=>b.onclick=()=>renameFormat(b.dataset.renameFormat));document.querySelectorAll('[data-delete-format]').forEach(b=>b.onclick=()=>deleteFormat(b.dataset.deleteFormat));if($('captainTeam'))$('captainTeam').onchange=e=>{localStorage.setItem(hqPublicTarget?'hq-captain-team:'+hqPublicTarget:'hc-v4-captain-team',e.target.value);e.target.blur();render()};document.querySelectorAll('[data-group]').forEach(b=>b.onclick=()=>{const g=DIRECTOR_GROUPS.find(x=>x.id===b.dataset.group);if(g){tab=g.start;render();if(tab==='rosters'){rosterLoad();waiverLoad()}if(tab==='connections'||tab==='registrations'){connectionLoad();waiverLoad();teamRegLoad();rosterLoad()}}});document.querySelectorAll('[data-tab]').forEach(b=>b.onclick=()=>{tab=b.dataset.tab;render();if(tab==='rosters'){rosterLoad();waiverLoad()}if(tab==='connections'||tab==='registrations'){connectionLoad();waiverLoad();teamRegLoad();rosterLoad()}});$('modeSelect').onchange=e=>{
  const desired=e.target.value;
  if(hqPublicTarget && (mode==='captain'||mode==='display')){
-   if(desired==='director'){hqReturnToDirector();return;}
+   if(desired==='director'){void hqReturnToDirector();return;}
    if(desired==='referee'){
      alert('Referee scoring requires an issued event-specific credential. Use the secure referee or court QR.');
      e.target.value=mode;return;
@@ -3234,7 +3276,10 @@ function bind(){if($('hqReturnDirectorView'))$('hqReturnDirectorView').onclick=h
      // Preserve the event scope; do not use an unscoped legacy link.
      const url=new URL(location.href);
      url.searchParams.set('mode',desired);
-     location.assign(url.href);return;
+     history.replaceState({},'',url.href);
+     mode=desired;
+     tab=desired==='captain'?'schedule':'display';
+     render();return;
    }
    e.target.value=mode;return;
  }
