@@ -1561,7 +1561,8 @@ function hqSetupEditableElement(el){
  // Public captain team selection is a local view preference, never a cloud mutation.
  if(hqPublicTarget && mode==='captain' && el.id==='captainTeam')return true;
  if(hqReadOnlySelectedControl(el))return true;
- if(tab==='prints'&&mode==='director'&&el.matches('button[data-graphic]'))return true;
+ if(tab==='prints'&&mode==='director'&&el.matches('button[data-graphic],button[data-asset-refresh]'))return true;
+ if(tab==='prints'&&hqAssetDirector()&&el.matches('button[data-asset-upload],button[data-asset-remove],input#hqAssetTitle,input#hqAssetFile,select#hqAssetSlot'))return true;
  if(tab==='prints'&&mode==='director'&&el.matches('button[data-graphic-private]'))return !!session&&cloudRole==='director';
  if(el.matches('button#hqFullEventReset'))return hqViewingSelected() && cloudRole==='director' && !!session && !!client && !hqEventResetBusy && !hqSelectedSaving;
  if(hqDraftSchedulePreview){return el.matches('button') && ['hqScheduleSave','hqScheduleCancel'].includes(el.id);}
@@ -2544,35 +2545,117 @@ const HQ_GRAPHICS=[
  {id:'spring-court',kind:'placeholder',title:'The Spring Court · Theme',subtitle:'Awaiting approved artwork'},
  {id:'royal-rally',kind:'placeholder',title:'Royal Rally · Theme',subtitle:'Awaiting approved artwork'}
 ];
+// Shared artwork metadata lives in hq_graphic_assets, outside every tournament.
+// Only approved, non-sensitive images are uploaded to the public artwork bucket.
+const HQ_ASSET_BUCKET='hq-shared-graphics';
+let hqAssetRows=[],hqAssetLoaded=false,hqAssetLoading=false,hqAssetBusy=false,hqAssetError='';
+const hqAssetDirector=()=>!!client&&!!session&&liveMode&&cloudRole==='director'&&mode==='director';
+function hqAssetUrl(row){
+ if(!client||!row?.object_path||!/^(?:art\/)[a-f0-9-]{36}\.(?:png|jpg|webp)$/.test(row.object_path))return '';
+ return client.storage.from(HQ_ASSET_BUCKET).getPublicUrl(row.object_path).data?.publicUrl||'';
+}
+function hqAssetById(id){return hqAssetRows.find(r=>r.id===id)||null;}
+function hqAssetArtwork(id){const row=hqAssetById(id);return row?hqAssetUrl(row):id==='hc-court-1'?HQ_GRAPHIC_HARVEST_COURT1:'';}
+async function hqAssetsLoad(force=false){
+ if(hqAssetLoading||(!force&&hqAssetLoaded)||!client||!liveMode)return;
+ hqAssetLoading=true;hqAssetError='';
+ try{
+  const {data,error}=await client.from('hq_graphic_assets').select('id,title,object_path,created_at,updated_at').order('title');
+  if(error)throw error;
+  hqAssetRows=Array.isArray(data)?data.filter(r=>typeof r?.id==='string'&&/^[a-z0-9-]{1,80}$/.test(r.id)&&hqAssetUrl(r)):[];
+  hqAssetLoaded=true;
+ }catch(e){hqAssetError='Cloud artwork unavailable: '+(e?.message||String(e));hqAssetLoaded=true;}
+ finally{hqAssetLoading=false;if(tab==='prints')render();}
+}
+async function hqAssetUpload(){
+ if(!hqAssetDirector()||hqAssetBusy){alert('Sign in as Director to upload shared artwork.');return;}
+ const file=document.getElementById('hqAssetFile')?.files?.[0];
+ const title=(document.getElementById('hqAssetTitle')?.value||'').trim();
+ const slot=document.getElementById('hqAssetSlot')?.value||'new';
+ if(!file||!title||title.length>120){alert('Choose an image and enter a title (1–120 characters).');return;}
+ const extensions={'image/png':'png','image/jpeg':'jpg','image/webp':'webp'};
+ const ext=extensions[file.type];
+ if(!ext||file.size<100||file.size>8*1024*1024){alert('Choose a PNG, JPG or WebP image under 8 MB.');return;}
+ // A random, immutable object path prevents cached images and accidental overwrites.
+ const path='art/'+crypto.randomUUID()+'.'+ext;
+ const id=slot==='new'?'user-'+crypto.randomUUID():slot;
+ const old=hqAssetById(id);
+ if(old&&!confirm('Replace the shared artwork for '+old.title+'? Every tournament will see the new image.'))return;
+ hqAssetBusy=true;
+ try{
+  const uploaded=await client.storage.from(HQ_ASSET_BUCKET).upload(path,file,{contentType:file.type,upsert:false,cacheControl:'3600'});
+  if(uploaded.error)throw uploaded.error;
+  const {error}=await client.from('hq_graphic_assets').upsert({id,title,object_path:path,updated_by:session.user.id},{onConflict:'id'});
+  if(error){await client.storage.from(HQ_ASSET_BUCKET).remove([path]);throw error;}
+  await hqAssetsLoad(true);
+  // Removing old artwork is best-effort; metadata already points to the new file.
+  if(old?.object_path && old.object_path!==path)void client.storage.from(HQ_ASSET_BUCKET).remove([old.object_path]);
+  alert('Shared artwork saved. It is now available for every tournament.');
+ }catch(e){alert('Artwork was NOT saved: '+(e?.message||String(e)));}
+ finally{hqAssetBusy=false;render();}
+}
+async function hqAssetRemove(id){
+ if(!hqAssetDirector()||hqAssetBusy)return;
+ const old=hqAssetById(id);if(!old)return;
+ if(!confirm('Remove '+old.title+' from the shared graphics library for ALL tournaments?'))return;
+ hqAssetBusy=true;
+ try{
+  const {error}=await client.from('hq_graphic_assets').delete().eq('id',id);
+  if(error)throw error;
+  await hqAssetsLoad(true);
+  // Keep the old image as an unlinked backup if the Storage deletion fails.
+  if(old.object_path)void client.storage.from(HQ_ASSET_BUCKET).remove([old.object_path]);
+ }catch(e){alert('Artwork removal failed: '+(e?.message||String(e)));}
+ finally{hqAssetBusy=false;render();}
+}
+function hqAssetManagementUi(){
+ if(!hqAssetDirector())return '<p class="note">Sign in as Director to upload or replace graphics. All tournaments can use the same library.</p>';
+ const slots=HQ_GRAPHICS.filter(g=>g.kind==='placeholder'||g.kind==='art').map(g=>`<option value="${esc(g.id)}">Replace: ${esc(g.title)}</option>`).join('');
+ return `<details><summary style="cursor:pointer;font-weight:750;padding:10px 0">Manage shared artwork · Director</summary>
+ <p class="note">Upload PNG, JPG or WebP (max 8 MB). Public artwork only: never upload credential QRs, private documents, or personal information.</p>
+ <label>Graphic title<input id="hqAssetTitle" maxlength="120" placeholder="e.g. Court 2 · Harvest Crown"></label>
+ <label>Library placement<select id="hqAssetSlot"><option value="new">Add new graphic</option>${slots}</select></label>
+ <label>Image file<input type="file" id="hqAssetFile" accept="image/png,image/jpeg,image/webp"></label>
+ <button class="btn primary" data-asset-upload="1" ${hqAssetBusy?'disabled':''}>Upload to Shared Library</button>
+ <p class="note">Uploads are shared across events and survive Full Event Reset. If you replace a bundled image, removing the replacement restores the original.</p></details>`;
+}
 function hqSharedGraphicLibrary(){
  const card=g=>{
-  const art=g.kind==='art'?`<img alt="${esc(g.title)}" src="${HQ_GRAPHIC_HARVEST_COURT1}" loading="lazy" style="max-width:100%;height:180px;object-fit:contain;border-radius:10px;background:#111c2b">`:
+  const url=hqAssetArtwork(g.id);
+  const art=url?`<img alt="${esc(g.title)}" src="${esc(url)}" loading="lazy" style="max-width:100%;height:180px;object-fit:contain;border-radius:10px;background:#111c2b">`:
    g.kind==='placeholder'?'<div class="hq-graphic-thumb hq-graphic-placeholder">ARTWORK<br>COMING SOON</div>':
    `<div class="hq-graphic-thumb">♛<small>${esc(g.kind==='court'?'COURT '+g.court:g.kind==='private'?'PRIVATE QR':'SCAN TO OPEN')}</small></div>`;
-  const action=g.kind==='placeholder'?'<span class="mini">Placeholder · no file available</span>':
+  const action=(g.kind==='placeholder'||g.kind==='art')&&!url?'<span class="mini">Placeholder · no file available</span>':
    g.kind==='private'?`<button class="btn primary" data-graphic-private="1">Choose Court & Print</button>`:
    `<button class="btn primary" data-graphic="${esc(g.id)}">Preview / Print</button>`;
-  return `<div class="tile hq-graphic-card">${art}<h3>${esc(g.title)}</h3><p class="note">${esc(g.subtitle)}</p>${action}</div>`;
+  const uploaded=hqAssetById(g.id);
+  const remove=uploaded&&hqAssetDirector()?`<button class="btn" data-asset-remove="${esc(g.id)}">Remove cloud artwork</button>`:'';
+  return `<div class="tile hq-graphic-card">${art}<h3>${esc(uploaded?.title||g.title)}</h3><p class="note">${esc(uploaded?'Cloud artwork · shared across all tournaments':g.subtitle)}</p>${action}${remove}</div>`;
  };
+ const base=HQ_GRAPHICS.map(g=>hqAssetById(g.id)?{...g,kind:'art'}:g);
+ const extras=hqAssetRows.filter(r=>!HQ_GRAPHICS.some(g=>g.id===r.id)).map(r=>({id:r.id,kind:'art',title:r.title,subtitle:'Uploaded shared artwork'}));
+ const cloudState=hqAssetError?`<p class="notice bad">${esc(hqAssetError)} · Bundled signs remain available.</p>`:hqAssetLoading?'<p class="note">Loading cloud artwork…</p>':!client?'<p class="note">Cloud is not connected. Bundled graphics and neutral templates remain available.</p>':'';
  return `<section class="panel" id="hqSharedGraphics"><h2>Event Graphics · Shared Library</h2>
- <p class="note">All graphics are available for every tournament and remain available after Full Event Reset. Neutral designs automatically use <strong>${esc(S.title)}</strong> when printed. Existing branded artwork retains its original title.</p>
- <div class="notice">Included now: Harvest Crown Classic Court 1 artwork and reusable neutral signs. Court 2 and future event artwork are placeholders until supplied. This release does not yet support cloud artwork uploads.</div>
- <h3>Court signage</h3><div class="grid">${HQ_GRAPHICS.filter(x=>['art','court'].includes(x.kind)||x.id==='hc-court-2').map(card).join('')}</div>
- <h3>QR signs</h3><div class="grid">${HQ_GRAPHICS.filter(x=>['qr','private'].includes(x.kind)).map(card).join('')}</div>
- <details><summary style="cursor:pointer;font-weight:750;padding:10px 0">Future chapter artwork · placeholders</summary><div class="grid">${HQ_GRAPHICS.filter(x=>x.kind==='placeholder'&&x.id!=='hc-court-2').map(card).join('')}</div></details>
- <p class="note">Public QRs use the selected event link. Court QRs contain private access; print only when needed. Scan-test all QR signs before distributing.</p></section>`;
+ <p class="note">One graphics library for every tournament, including archived events. Neutral signs use <strong>${esc(S.title)}</strong> at print time; branded artwork retains its original wording.</p>
+ ${cloudState}<button class="btn" data-asset-refresh="1">Refresh artwork</button>
+ <h3>Court signage & uploaded artwork</h3><div class="grid">${base.filter(g=>['art','court'].includes(g.kind)||g.id==='hc-court-2').concat(extras).map(card).join('')}</div>
+ <h3>QR signs</h3><div class="grid">${base.filter(g=>['qr','private'].includes(g.kind)).map(card).join('')}</div>
+ <details><summary style="cursor:pointer;font-weight:750;padding:10px 0">Future chapter artwork · placeholders</summary><div class="grid">${base.filter(g=>g.kind==='placeholder'&&g.id!=='hc-court-2').map(card).join('')}</div></details>
+ ${hqAssetManagementUi()}
+ <p class="note">Private scoring credentials are never stored as shared artwork. Scan-test printed QRs before distribution.</p></section>`;
 }
 function hqGraphicPrintHtml(g,qrText){
  const label=g.kind==='court'?'COURT '+g.court:g.kind==='private'?'COURT '+g.court+' · SCORE ENTRY':g.qr==='captain'?'CAPTAIN’S VIEW':'PUBLIC DISPLAY';
- if(g.kind==='art')return `<section class="hq-art-print"><img src="${HQ_GRAPHIC_HARVEST_COURT1}" alt="Harvest Crown Classic Court 1" style="display:block;max-width:100%;max-height:95vh;object-fit:contain;margin:auto"></section>`;
+ if(g.kind==='art')return `<section class="hq-art-print"><img src="${esc(hqAssetArtwork(g.id))}" alt="${esc(g.title)}" style="display:block;max-width:100%;max-height:95vh;object-fit:contain;margin:auto"></section>`;
  const title=esc(S.title),detail=g.kind==='private'?'AUTHORIZED OFFICIALS ONLY · Private scoring access':g.kind==='court'?'SOVEREIGN SPORTS · TOURNAMENT COURT':g.qr==='captain'?'TEAM SCHEDULES · OFFICIATING · BRACKET':'SCHEDULE · STANDINGS · LIVE BRACKET';
  const qrBlock=qrText?`<div id="qr-target" class="qr" style="margin:25px auto"></div><p style="font-size:14px;font-weight:bold">Scan with your phone camera</p>`:'';
  return `<section class="hq-sign"><div class="hq-sign-shell"><div class="hq-sign-top">♛ SOVEREIGN SPORTS ♛</div><h1 class="hq-sign-event">${title}</h1><div class="hq-sign-line"></div><div class="hq-sign-label">${esc(label)}</div>${qrBlock}<p class="hq-sign-detail">${esc(detail)}</p><div class="hq-sign-bottom">SOVEREIGN SPORTS · TOURNAMENT HQ</div></div></section>`;
 }
 function hqPrintSharedGraphic(id){
- const g=HQ_GRAPHICS.find(x=>x.id===id);
- if(!g||g.kind==='placeholder'||g.kind==='private')return;
- if(g.kind==='art'&&!/harvest crown/i.test(S.title)){
+ const g=HQ_GRAPHICS.find(x=>x.id===id)||hqAssetRows.filter(r=>!HQ_GRAPHICS.some(t=>t.id===r.id)).map(r=>({id:r.id,kind:'art',title:r.title})).find(x=>x.id===id);
+ if(!g||g.kind==='private'||(g.kind==='placeholder'&&!hqAssetArtwork(id)))return;
+ if(g.kind==='placeholder')g.kind='art';
+ if(g.kind==='art'&&/harvest crown/i.test(g.title)&&!/harvest crown/i.test(S.title)){
   if(!confirm('This original artwork says Harvest Crown Classic and will NOT change to '+S.title+'. Print the branded graphic anyway?'))return;
  }
  let qr=null;
@@ -2688,6 +2771,7 @@ if(focused && focused.closest && focused.closest('#root') &&
 const oldNav=document.querySelector('#root .tabs');
 const oldNavScroll=oldNav?oldNav.scrollLeft:0;
 document.title='Sovereign Sports Tournament HQ · '+S.title;const pages={home,assignments:assignmentsPage,quick:quickFixPage,matches:matchesPage,standings:standingsPage,bracket:bracketPage,setup,formats:formatsPage,safety,cloud:cloudPage,prints:reportCenter,sponsors:sponsorPage,rosters:rosterPage,registrations:registrationManagementPage,connections:connectionPage,submit:reportView,reports:reportHistory,schedule:captainPage,display:displayPage};$('root').innerHTML=header()+`<main class="shell">${hqPreviewPanel()}${hqViewingSelected()&&mode==='director'&&hqEventPreview?.raw?.data?`<div class=\"notice\">Independent tournament · ${esc(S.status.toUpperCase())}. ${S.status==='completed'?'Historical results are protected; use Manage Tournaments to restore an archived listing.':S.status==='draft'?'Empty drafts allow Setup changes; sponsor and referee-name changes use event-scoped saves.':'Competition structure is protected after publishing. Sponsor and referee-name changes may require backend approval.'} Read-only controls, reports and navigation remain accessible.</div>`:''}${hqPublicTarget&&hqPublicError?'<div class="notice bad">'+esc(hqPublicError)+'</div>':''}${hqPublicTarget&&!hqPublicLoaded?'<div class="notice">Public tournament information is not yet available. No other event data will be shown.</div>':''}${liveMode&&mode==='director'&&cloudRole==='viewer'?'<div class="notice bad">Director controls are locked. Sign in with an authorized director account under Cloud & Backups.</div>':''}${mode!=='display'&&!hqViewingSelected()&&liveMode&&lastSyncAt&&Date.now()-lastSyncAt>25000?'<div class="notice bad">Cloud updates delayed — check connection before relying on these results.</div>':''}${notice && mode!=='display'?`<div class="notice">${esc(notice)}</div>`:''}${liveMode&&mode==='director'&&cloudRole==='viewer'&&tab!=='cloud'?'<div class="panel"><p class="note">Sign in on the Cloud page to unlock live director controls. Your practice data is not deleted.</p><button class="btn primary" data-tab="cloud">Open Cloud Sign-In</button></div>':liveMode&&mode==='director'&&cloudRole==='assistant'?(tab==='cloud'?cloudPage():`<div class="panel"><h2>Assistant Director</h2><p class="note">Review scores while the director plays. Tournament setup and manual score edits are director-only.</p></div>${reportQueue()}`):(pages[tab]||home)()}</main>`;restoreSetupDraft();bind();hqLockSelectedControls();
+if(tab==='prints'&&!hqAssetLoaded&&!hqAssetLoading&&client&&liveMode)void hqAssetsLoad();
 const newNav=document.querySelector('#root .tabs');
 if(newNav)newNav.scrollLeft=oldNavScroll;
 }
@@ -3031,13 +3115,16 @@ document.addEventListener('click',e=>{
 // Shared print action dispatcher: one delegated listener survives view re-renders.
 // Capture keeps printing available if an unrelated binding fails.
 document.addEventListener('click',function printActions(e){
- const b=e.target.closest('[data-print],[data-doc],[data-courtprint],[data-publicqr],[data-graphic],[data-graphic-private]');
+ const b=e.target.closest('[data-print],[data-doc],[data-courtprint],[data-publicqr],[data-graphic],[data-graphic-private],[data-asset-upload],[data-asset-remove],[data-asset-refresh]');
  if(!b)return;
  if(b.disabled)return;
  e.preventDefault();e.stopImmediatePropagation();
  // Preserve print operations and report failures without a developer-only UI.
  const show=(msg,bad=false)=>{if(bad)alert(msg)};
  try{
+  if(b.hasAttribute('data-asset-refresh')){void hqAssetsLoad(true);return;}
+  if(b.hasAttribute('data-asset-upload')){void hqAssetUpload();return;}
+  if(b.hasAttribute('data-asset-remove')){void hqAssetRemove(b.getAttribute('data-asset-remove'));return;}
   if(b.hasAttribute('data-graphic')){hqPrintSharedGraphic(b.getAttribute('data-graphic'));return;}
   if(b.hasAttribute('data-graphic-private')){hqPrintPrivateCourtSign();return;}
   if(b.hasAttribute('data-publicqr')){publicSign(b.getAttribute('data-publicqr'));return;}
