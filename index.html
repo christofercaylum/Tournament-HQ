@@ -122,10 +122,34 @@ function championshipMatch(){
  const named=games.filter(m=>/championship|\bgrand.?final\b|\bfinals?\b/i.test(String(m.slot??'')+' '+String(m.round??'')) && !/semi.?final|quarter.?final/i.test(String(m.slot??'')+' '+String(m.round??'')));
  if(named.length===1)return named[0];
  const ranked=games.map(m=>({m,r:playoffRoundRank(m)})).filter(v=>v.r!==null);
- if(!ranked.length)return games.length===1?games[0]:null;
+ if(!ranked.length)return games.length===1?games[0]:hqCompletedFinalFallback(games);
  const last=Math.max(...ranked.map(v=>v.r));
  const final=ranked.filter(v=>v.r===last);
- return final.length===1?final[0].m:null;
+ if(final.length===1)return final[0].m;
+ return hqCompletedFinalFallback(games);
+}
+// A completed independent event is accepted by the backend only after its
+// championship result is verified. Public feeds can have missing or repeated
+// round identifiers, so use the bracket's final scheduled match as a narrow
+// display-only fallback. Never infer a winner from status alone.
+function hqCompletedFinalFallback(games){
+ if(S.status!=='completed'||games.length<2||games.some(m=>!isDone(m)))return null;
+ const timed=games.filter(m=>Number.isFinite(Number(m.start)) && m.start!==null && m.start!==undefined && m.start!=='');
+ if(timed.length!==games.length)return null;
+ const lastTime=Math.max(...timed.map(m=>Number(m.start)));
+ const latest=timed.filter(m=>Number(m.start)===lastTime);
+ if(latest.length!==1)return null;
+ const candidate=latest[0];
+ // The existing bracket generator uses index 0 for the championship.
+ if(candidate.index!==undefined && candidate.index!==null && Number(candidate.index)!==0)return null;
+ const participants=[candidate.home,candidate.away];
+ if(participants.some(id=>!id)||!winner(candidate))return null;
+ const earlier=timed.filter(m=>m!==candidate && Number(m.start)<lastTime);
+ // Both finalists must have reached the championship via the earlier
+ // playoff results, with an opening-round bye accepted for either seed.
+ const priorWinners=new Set(earlier.map(m=>winner(m)).filter(Boolean));
+ const previousParticipation=participants.some(id=>priorWinners.has(id));
+ return previousParticipation?candidate:null;
 }
 function tournamentChampion(){const final=championshipMatch();return final&&isDone(final)?winner(final):null}
 function tournamentFinished(){return S.status==='completed'&&!!tournamentChampion()}
@@ -2928,14 +2952,13 @@ function hqDirectorHomeUrl(){
  return location.origin+location.pathname;
 }
 async function hqReturnToDirector(event){
-  // Public view and Director workspace share a page, but independent-event
-  // public pages use their own read-only boot path. Return without another
-  // public boot or relying on a service-worker/browser reload.
+  // Keep the independent tournament being viewed when returning to Director.
+  // The public page is a separate boot context; never adopt public data as
+  // authorized Director state. Re-read the catalog and event using Director RPCs.
   if(event?.preventDefault)event.preventDefault();
-  // render() deliberately skips updates while an input/select has focus.
-  // Release the role selector before changing workspaces.
   if(document.activeElement?.id==='modeSelect')document.activeElement.blur();
   if(refSecret||courtSecret)return;
+  const returnEventId=hqUuid(hqPublicTarget)?hqPublicTarget:null;
   const homeUrl=hqDirectorHomeUrl();
   history.replaceState({},'',homeUrl);
   if(hqPublicTimer){clearInterval(hqPublicTimer);hqPublicTimer=null;}
@@ -2943,26 +2966,42 @@ async function hqReturnToDirector(event){
   hqInspectedId='legacy';hqEventPreview=null;hqLegacySnapshot=null;
   hqDraftSchedulePreview=null;hqSelectedMessage='';pending=[];hqPendingError='';
   mode='director';tab='home';S=load();notice='';
-  // The public QR can supply a project URL/key without changing saved
-  // Director configuration. Use the Director's saved connection on return.
   const savedCloud=JSON.parse(localStorage.getItem(CONFIG)||'null');
   if(savedCloud?.url&&savedCloud?.key &&
      (!cloud||cloud.url!==savedCloud.url||cloud.key!==savedCloud.key)){
     cloud=savedCloud;client=null;session=null;cloudRole='viewer';
   }
+  // Keep the page on the Director dashboard while authorization is verified.
+  // Do not surface the legacy event as the supposed selected tournament.
+  if(returnEventId){
+    S=defaults();S.title='Restoring selected tournament…';
+    notice='Restoring the tournament you were viewing…';
+  }
   render();
   try{
-    if(!client && cloud?.url && cloud?.key){await initCloud();return;}
-    if(client){
-      // Public boot skips normal Director initialization. Recheck the
-      // account, then load the event catalog without switching event.
-      const result=await client.auth.getSession();
-      session=result?.data?.session||null;
-      await hqRefreshAccountRole();
-      if(session&&cloudRole==='director')await hqCatalogReload();
+    if(!client && cloud?.url && cloud?.key)await initCloud();
+    if(!client)throw Error('Connect to Supabase in Administration to reopen the selected tournament.');
+    const result=await client.auth.getSession();
+    session=result?.data?.session||null;
+    await hqRefreshAccountRole();
+    if(!session||cloudRole!=='director')throw Error('Director sign-in is required to reopen the selected tournament.');
+    await hqCatalogReload();
+    if(returnEventId){
+      if(!hqEventCatalog.some(e=>e.id===returnEventId))throw Error('The tournament is not available in the Director event catalog.');
+      await hqInspectEvent(returnEventId);
+      if(hqInspectedId!==returnEventId||hqEventPreview?.error||hqEventPreview?.raw?.data?.eventId!==returnEventId)
+        throw Error('The selected tournament could not be verified. Use Manage Tournaments to reopen it.');
     }
+    tab='home';notice='';
   }catch(err){
-    notice='Director cloud connection needs attention. Open Administration to sign in.';
+    // Do not silently fall back to Harvest Crown after a scoped public view.
+    if(returnEventId){
+      hqInspectedId=returnEventId;
+      hqEventPreview={id:returnEventId,title:'Selected tournament',error:err?.message||String(err)};
+      S=defaults();S.title='Selected tournament unavailable';
+    }
+    tab='home';
+    notice='Unable to restore selected tournament: '+(err?.message||String(err));
   }
   render();
 }
