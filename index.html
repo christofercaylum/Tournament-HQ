@@ -293,7 +293,7 @@ function assignBracketOfficials(){
 function bracketStaffingNotes(){const gone=eliminatedTeams();return S.matches.filter(m=>m.stage==='playoff'&&!isDone(m)).flatMap(m=>{let notes=[];if(!m.home||!m.away)return notes;if(!m.official)notes.push(matchLabel(m)+': referee needed');if((S.settings.bracketLineMode==='active'||S.settings.bracketLineMode==='all')&&!m.lineTeam)notes.push(matchLabel(m)+': line judges needed (active and nonplaying teams may be unavailable)');if(m.lineTeam&&gone.has(m.lineTeam))notes.push(matchLabel(m)+': eliminated team still assigned as line judges');return notes})}
 function saveStageOfficials(){S.settings.bracketOfficialMode=$('bracketOfficialMode').value;S.settings.bracketLineMode=$('bracketLineMode').value;const cleared=cleanEliminatedDuties();const assigned=assignBracketOfficials();audit('Bracket officiating saved','Director',`${cleared} old duties cleared; ${assigned} provisional duties assigned`);local()}
 // Sponsor presentation is event-scoped; logos can use approved shared artwork URLs.
-const HQ_SPONSOR_TIERS={presenting:{label:'Presenting Partner',weight:3},premier:{label:'Premier Partner',weight:2},featured:{label:'Featured Partner',weight:1},community:{label:'Community Partner',weight:1}};
+const HQ_SPONSOR_TIERS={founding:{label:'Founding Sponsor',weight:4},presenting:{label:'Presenting Partner',weight:3},premier:{label:'Premier Partner',weight:2},featured:{label:'Featured Partner',weight:1},community:{label:'Community Partner',weight:1}};
 const hqSponsorTier=x=>HQ_SPONSOR_TIERS[x?.tier]?x.tier:'community';
 const hqSponsorActive=x=>x?.enabled!==false;
 function hqSponsorLogoOptions(selected=''){
