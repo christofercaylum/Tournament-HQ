@@ -82,6 +82,13 @@
 @media(min-width:840px){.dx-grid{grid-template-columns:repeat(3,minmax(0,1fr))}.dx-list{grid-template-columns:repeat(2,minmax(0,1fr))}}
 @media(max-width:600px){.dx-grid{gap:9px}.dx-card{min-height:143px;padding:14px}.dx-card strong{font-size:15px}.dx-card .dx-desc{font-size:12px}.dx-list .dx-card{padding:13px}.dx-nav{min-height:47px}.dx-event{padding:15px}}
 @media print{.dx-nav,.dx-back{display:none!important}}
+</style><style id="hq-art-browser-css">
+.hq-art-collections{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin:10px 0 18px}
+.hq-art-collection{display:flex!important;flex-direction:column;align-items:flex-start;text-align:left;gap:5px;min-height:108px;justify-content:center;white-space:normal!important}
+.hq-art-collection small{font-size:11px;opacity:.83;font-weight:500}
+#hqGraphicCards .hq-graphic-card[hidden]{display:none!important}
+#hqSharedGraphics{scroll-margin-top:22px}
+@media(max-width:550px){.hq-art-collections{grid-template-columns:repeat(2,minmax(0,1fr))}.hq-art-collection{min-height:94px;padding:10px!important}}
 </style></head><body><div id="root"></div><script>
 'use strict';
 const KEY='hc-v4-release-state',CONFIG='hc-v4-release-cloud',MODES=['director','referee','captain','display'];const $=id=>document.getElementById(id);const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));const copy=o=>JSON.parse(JSON.stringify(o));const uid=()=>crypto.randomUUID?.()||String(Date.now()+Math.random());
@@ -1795,10 +1802,10 @@ function hqSetupEditableElement(el){
  // Printing and DOC exports are local, read-only operations. They work for
  // verified independent Draft events too (e.g. after generating a schedule).
  if(tab==='prints'&&mode==='director'&&el.matches('button[data-print],button[data-doc]'))return !!hqEventPreview?.raw?.data && !hqEventPreview?.error;
- if(tab==='prints'&&mode==='director'&&el.matches('button[data-graphic],button[data-asset-refresh]'))return true;
- if(tab==='prints'&&mode==='director'&&el.matches('button[data-compose-print],select#hqComposeKind,select#hqComposeArtwork,select#hqComposeLayout,input#hqComposeHeading,input#hqComposeLink'))return true;
+ if(tab==='prints'&&mode==='director'&&el.matches('button[data-graphic],button[data-asset-refresh],button[data-graphics-collection],button[data-graphic-compose],input#hqGraphicSearch,select#hqGraphicType'))return true;
+ if(tab==='prints'&&mode==='director'&&el.matches('button[data-compose-print],select#hqComposeKind,select#hqComposeArtwork,select#hqComposeLayout,select#hqComposeCollection,input#hqComposeHeading,input#hqComposeLink'))return true;
  if(tab==='prints'&&mode==='director'&&el.matches('select#hqComposeCourt'))return !!session&&cloudRole==='director';
- if(tab==='prints'&&hqAssetDirector()&&el.matches('button[data-asset-upload],button[data-asset-remove],input#hqAssetTitle,input#hqAssetFile,select#hqAssetSlot'))return true;
+ if(tab==='prints'&&hqAssetDirector()&&el.matches('button[data-asset-upload],button[data-asset-remove],input#hqAssetTitle,input#hqAssetFile,select#hqAssetSlot,select#hqAssetCollection,select#hqAssetType'))return true;
  if(tab==='prints'&&mode==='director'&&el.matches('button[data-graphic-private]'))return !!session&&cloudRole==='director';
  if(el.matches('button#hqFullEventReset'))return hqViewingSelected() && cloudRole==='director' && !!session && !!client && !hqEventResetBusy && !hqSelectedSaving;
  if(hqDraftSchedulePreview){return el.matches('button') && ['hqScheduleSave','hqScheduleCancel'].includes(el.id);}
@@ -2814,6 +2821,59 @@ const HQ_GRAPHICS=[
  {id:'spring-court',kind:'placeholder',title:'The Spring Court · Theme',subtitle:'Awaiting approved artwork'},
  {id:'royal-rally',kind:'placeholder',title:'Royal Rally · Theme',subtitle:'Awaiting approved artwork'}
 ];
+// Shared graphics browser: grouping is descriptive, never a visibility permission.
+// New uploads encode collection/type in their existing public asset ID, so no SQL
+// migration or new event-scoped storage is needed. Older IDs fall back to titles.
+const HQ_ART_COLLECTIONS={
+ 'ice-ball':{label:'The Ice Ball',detail:'Chapter I',icon:'❄'},
+ 'spring-court':{label:'The Spring Court',detail:'Chapter II',icon:'✿'},
+ 'royal-rally':{label:'Royal Rally',detail:'Chapter III',icon:'☀'},
+ 'harvest-crown':{label:'The Harvest Crown',detail:'Chapter IV',icon:'♛'},
+ 'neutral':{label:'Sovereign Sports',detail:'Neutral & reusable',icon:'♜'},
+ 'other':{label:'Other Events',detail:'Additional artwork',icon:'◇'}
+};
+const HQ_ART_TYPES={court:'Court Signage',welcome:'Welcome Signs',qr:'QR Backgrounds',other:'Other Graphics'};
+let hqGraphicCollection='all',hqGraphicType='all',hqGraphicSearch='';
+let hqComposeCollection='all',hqComposeRequestedArt='';
+function hqGraphicMeta(g){
+ const id=String(g.id||''),name=String(g.title||'');
+ const encoded=id.match(/^user-(ice-ball|spring-court|royal-rally|harvest-crown|neutral|other)-(court|welcome|qr|other)-[a-f0-9-]{36}$/);
+ if(encoded)return {collection:encoded[1],type:encoded[2]};
+ const hay=(id+' '+name).toLowerCase();
+ const collection=/ice[ -]?ball/.test(hay)?'ice-ball':/spring[ -]?court/.test(hay)?'spring-court':/royal[ -]?rally/.test(hay)?'royal-rally':/harvest[ -]?crown|^hc-/.test(hay)?'harvest-crown':/neutral|sovereign sports|^generic/.test(hay)?'neutral':'other';
+ const type=g.kind==='qr'||g.kind==='private'||/qr|scan|public display|captain.s view/.test(hay)?'qr':g.kind==='court'||/court\s*\d+|court[ -]?(?:one|two|three|four)/.test(hay)?'court':/welcome|entrance/.test(hay)?'welcome':'other';
+ return {collection,type};
+}
+function hqGraphicsAll(){
+ const base=HQ_GRAPHICS.map(g=>hqAssetById(g.id)?{...g,kind:'art'}:g);
+ const extras=hqAssetRows.filter(r=>!HQ_GRAPHICS.some(g=>g.id===r.id)).map(r=>({id:r.id,kind:'art',title:r.title,subtitle:'Shared uploaded artwork'}));
+ return base.concat(extras);
+}
+function hqGraphicJump(){requestAnimationFrame(()=>document.getElementById('hqSharedGraphics')?.scrollIntoView({block:'start'}));}
+function hqComposeArtworkChoices(){
+ const all=hqGraphicsAll().filter(g=>!!hqAssetArtwork(g.id));
+ const collections=Object.keys(HQ_ART_COLLECTIONS);
+ return [{id:'neutral',title:'Neutral Sovereign Sports design',collection:'neutral'},...all.map(g=>({id:g.id,title:hqAssetById(g.id)?.title||g.title,collection:hqGraphicMeta(g).collection}))]
+ .filter(g=>hqComposeCollection==='all'||g.collection===hqComposeCollection);
+}
+function hqComposeSetCollection(collection){
+ hqComposeCollection=collection in HQ_ART_COLLECTIONS?collection:'all';
+ const select=document.getElementById('hqComposeArtwork');if(!select)return;
+ const prev=select.value,choices=hqComposeArtworkChoices();
+ select.innerHTML=choices.map(g=>`<option value="${esc(g.id)}">${esc(g.title)}</option>`).join('');
+ const desired=hqComposeRequestedArt||prev;
+ if(choices.some(g=>g.id===desired))select.value=desired;
+ hqComposeRequestedArt='';
+}
+function hqGraphicsFilterCards(){
+ const filter=(hqGraphicSearch||'').trim().toLocaleLowerCase();let shown=0;
+ document.querySelectorAll('#hqGraphicCards [data-graphic-card]').forEach(card=>{
+  const match=!filter||String(card.getAttribute('data-search')||'').toLocaleLowerCase().includes(filter);
+  card.hidden=!match;if(match)shown++;
+ });
+ const count=document.getElementById('hqGraphicCount');if(count)count.textContent=shown+' graphic'+(shown===1?'':'s');
+ const none=document.getElementById('hqGraphicEmpty');if(none)none.hidden=shown>0;
+}
 // Shared artwork metadata lives in hq_graphic_assets, outside every tournament.
 // Only approved, non-sensitive images are uploaded to the public artwork bucket.
 const HQ_ASSET_BUCKET='hq-shared-graphics';
@@ -2847,7 +2907,10 @@ async function hqAssetUpload(){
  if(!ext||file.size<100||file.size>8*1024*1024){alert('Choose a PNG, JPG or WebP image under 8 MB.');return;}
  // A random, immutable object path prevents cached images and accidental overwrites.
  const path='art/'+crypto.randomUUID()+'.'+ext;
- const id=slot==='new'?'user-'+crypto.randomUUID():slot;
+ const collection=document.getElementById('hqAssetCollection')?.value||'other';
+ const type=document.getElementById('hqAssetType')?.value||'other';
+ if(!(collection in HQ_ART_COLLECTIONS)||!(type in HQ_ART_TYPES))throw Error('Choose a valid collection and graphic type');
+ const id=slot==='new'?'user-'+collection+'-'+type+'-'+crypto.randomUUID():slot;
  const old=hqAssetById(id);
  if(old&&!confirm('Replace the shared artwork for '+old.title+'? Every tournament will see the new image.'))return;
  hqAssetBusy=true;
@@ -2878,49 +2941,66 @@ async function hqAssetRemove(id){
  finally{hqAssetBusy=false;render();}
 }
 function hqAssetManagementUi(){
- if(!hqAssetDirector())return '<p class="note">Sign in as Director to upload or replace graphics. All tournaments can use the same library.</p>';
- const slots=HQ_GRAPHICS.filter(g=>g.kind==='placeholder'||g.kind==='art').map(g=>`<option value="${esc(g.id)}">Replace: ${esc(g.title)}</option>`).join('');
- return `<details><summary style="cursor:pointer;font-weight:750;padding:10px 0">Manage shared artwork · Director</summary>
- <p class="note">Upload PNG, JPG or WebP (max 8 MB). Public artwork only: never upload credential QRs, private documents, or personal information.</p>
- <label>Graphic title<input id="hqAssetTitle" maxlength="120" placeholder="e.g. Court 2 · Harvest Crown"></label>
+ if(!hqAssetDirector())return '<p class="note">Sign in as Director to upload or replace graphics.</p>';
+ const slots=hqGraphicsAll().filter(g=>g.kind==='placeholder'||g.kind==='art').map(g=>`<option value="${esc(g.id)}">Replace: ${esc(hqAssetById(g.id)?.title||g.title)}</option>`).join('');
+ const collections=Object.entries(HQ_ART_COLLECTIONS).map(([key,v])=>`<option value="${key}" ${(hqGraphicCollection===key||hqGraphicCollection==='all'&&key==='neutral')?'selected':''}>${esc(v.label)}</option>`).join('');
+ const types=Object.entries(HQ_ART_TYPES).map(([key,v])=>`<option value="${key}" ${key==='other'?'selected':''}>${esc(v)}</option>`).join('');
+ return `<details id="hqManageArtwork"><summary style="cursor:pointer;font-weight:750;padding:10px 0">Upload / Replace Artwork · Director</summary>
+ <p class="note">Approved public artwork only · PNG, JPG or WebP · 8 MB maximum. Never upload credential-bearing QR codes.</p>
+ <div class="grid">
+ <label>Graphic title<input id="hqAssetTitle" maxlength="120" placeholder="e.g. Ice Ball · Court 2"></label>
  <label>Library placement<select id="hqAssetSlot"><option value="new">Add new graphic</option>${slots}</select></label>
+ <label>Collection<select id="hqAssetCollection">${collections}</select></label>
+ <label>Artwork type<select id="hqAssetType">${types}</select></label>
  <label>Image file<input type="file" id="hqAssetFile" accept="image/png,image/jpeg,image/webp"></label>
- <button class="btn primary" data-asset-upload="1" ${hqAssetBusy?'disabled':''}>Upload to Shared Library</button>
- <p class="note">Uploads are shared across events and survive Full Event Reset. If you replace a bundled image, removing the replacement restores the original.</p></details>`;
+ </div><button class="btn primary" data-asset-upload="1" ${hqAssetBusy?'disabled':''}>Save to Shared Library</button>
+ <p class="note">Collection and type are saved with new uploads. Existing artwork is classified by its title; replacing an existing graphic retains its original library placement. All graphics remain available to every tournament.</p></details>`;
 }
 function hqSharedGraphicLibrary(){
+ const all=hqGraphicsAll();
+ const groups=[{id:'all',label:'All Graphics',detail:'Browse everything',icon:'▦'},...Object.entries(HQ_ART_COLLECTIONS).map(([id,v])=>({id,...v}))];
+ const collections=groups.map(g=>{
+  const n=g.id==='all'?all.length:all.filter(x=>hqGraphicMeta(x).collection===g.id).length;
+  return `<button class="btn hq-art-collection ${hqGraphicCollection===g.id?'primary':''}" type="button" data-graphics-collection="${g.id}" aria-pressed="${hqGraphicCollection===g.id}"><span aria-hidden="true" style="font-size:23px">${g.icon}</span><strong>${esc(g.label)}</strong><small>${esc(g.detail)} · ${n}</small></button>`;
+ }).join('');
+ const types=[{id:'all',label:'All types'},...Object.entries(HQ_ART_TYPES).map(([id,label])=>({id,label}))].map(t=>`<option value="${t.id}" ${hqGraphicType===t.id?'selected':''}>${esc(t.label)}</option>`).join('');
+ const shown=all.filter(g=>(hqGraphicCollection==='all'||hqGraphicMeta(g).collection===hqGraphicCollection)&&(hqGraphicType==='all'||hqGraphicMeta(g).type===hqGraphicType));
  const card=g=>{
-  const url=hqAssetArtwork(g.id);
-  const art=url?`<img alt="${esc(g.title)}" src="${esc(url)}" loading="lazy" style="max-width:100%;height:180px;object-fit:contain;border-radius:10px;background:#111c2b">`:
+  const url=hqAssetArtwork(g.id),uploaded=hqAssetById(g.id),meta=hqGraphicMeta(g);
+  const art=url?`<img alt="${esc(g.title)}" src="${esc(url)}" loading="lazy" style="width:100%;height:190px;object-fit:contain;border-radius:10px;background:#111c2b">`:
    g.kind==='placeholder'?'<div class="hq-graphic-thumb hq-graphic-placeholder">ARTWORK<br>COMING SOON</div>':
    `<div class="hq-graphic-thumb">♛<small>${esc(g.kind==='court'?'COURT '+g.court:g.kind==='private'?'PRIVATE QR':'SCAN TO OPEN')}</small></div>`;
-  const action=(g.kind==='placeholder'||g.kind==='art')&&!url?'<span class="mini">Placeholder · no file available</span>':
-   g.kind==='private'?`<button class="btn primary" data-graphic-private="1">Choose Court & Print</button>`:
+  const action=(g.kind==='placeholder'||g.kind==='art')&&!url?'<span class="mini">Placeholder · upload artwork to use</span>':
+   g.kind==='private'?'<button class="btn primary" data-graphic-private="1">Choose Court & Print</button>':
    `<button class="btn primary" data-graphic="${esc(g.id)}">Preview / Print</button>`;
-  const uploaded=hqAssetById(g.id);
-  const remove=uploaded&&hqAssetDirector()?`<button class="btn" data-asset-remove="${esc(g.id)}">Remove cloud artwork</button>`:'';
-  return `<div class="tile hq-graphic-card">${art}<h3>${esc(uploaded?.title||g.title)}</h3><p class="note">${esc(uploaded?'Cloud artwork · shared across all tournaments':g.subtitle)}</p>${action}${remove}</div>`;
+  const compose=url?`<button class="btn" data-graphic-compose="${esc(g.id)}">Use in QR Sign</button>`:'';
+  const remove=uploaded&&hqAssetDirector()?`<button class="btn" data-asset-remove="${esc(g.id)}">Remove Cloud Artwork</button>`:'';
+  return `<div class="tile hq-graphic-card" data-graphic-card="1" data-search="${esc((uploaded?.title||g.title)+' '+HQ_ART_COLLECTIONS[meta.collection].label+' '+HQ_ART_TYPES[meta.type])}">${art}
+  <h3>${esc(uploaded?.title||g.title)}</h3><p class="note">${esc(HQ_ART_TYPES[meta.type])} · ${esc(uploaded?'Uploaded shared artwork':g.subtitle||'Reusable template')}</p>
+  <div class="actions" style="display:flex;gap:8px;flex-wrap:wrap">${action}${compose}${remove}</div></div>`;
  };
- const base=HQ_GRAPHICS.map(g=>hqAssetById(g.id)?{...g,kind:'art'}:g);
- const extras=hqAssetRows.filter(r=>!HQ_GRAPHICS.some(g=>g.id===r.id)).map(r=>({id:r.id,kind:'art',title:r.title,subtitle:'Uploaded shared artwork'}));
- const cloudState=hqAssetError?`<p class="notice bad">${esc(hqAssetError)} · Bundled signs remain available.</p>`:hqAssetLoading?'<p class="note">Loading cloud artwork…</p>':!client?'<p class="note">Cloud is not connected. Bundled graphics and neutral templates remain available.</p>':'';
- return `<section class="panel" id="hqSharedGraphics"><h2>Event Graphics · Shared Library</h2>
- <p class="note">One graphics library for every tournament, including archived events. Neutral signs use <strong>${esc(S.title)}</strong> at print time; branded artwork retains its original wording.</p>
- ${cloudState}<button class="btn" data-asset-refresh="1">Refresh artwork</button>
- <h3>Court signage & uploaded artwork</h3><div class="grid">${base.filter(g=>['art','court'].includes(g.kind)||g.id==='hc-court-2').concat(extras).map(card).join('')}</div>
- <h3>QR signs</h3><div class="grid">${base.filter(g=>['qr','private'].includes(g.kind)).map(card).join('')}</div>
- <details><summary style="cursor:pointer;font-weight:750;padding:10px 0">Future chapter artwork · placeholders</summary><div class="grid">${base.filter(g=>g.kind==='placeholder'&&g.id!=='hc-court-2').map(card).join('')}</div></details>
+ const cloudState=hqAssetError?`<p class="notice bad">${esc(hqAssetError)} · Bundled signs remain available.</p>`:hqAssetLoading?'<p class="note">Loading cloud artwork…</p>':!client?'<p class="note">Cloud is not connected. Bundled graphics remain available.</p>':'';
+ return `<section class="panel" id="hqSharedGraphics"><h2>Graphics Library</h2>
+ <p class="note">Choose a collection, then a graphic. Every tournament can use all collections.</p>
+ ${cloudState}<div class="actions"><button class="btn" data-asset-refresh="1">Refresh Artwork</button></div>
+ <h3>Collections</h3><div class="hq-art-collections">${collections}</div>
+ <div class="grid" style="align-items:end"><label>Search artwork<input id="hqGraphicSearch" type="search" placeholder="Name, collection, or type" value="${esc(hqGraphicSearch)}"></label>
+ <label>Graphic type<select id="hqGraphicType">${types}</select></label></div>
+ <p class="note" id="hqGraphicCount">${shown.length} graphics</p>
+ <div class="grid" id="hqGraphicCards">${shown.map(card).join('')}</div>
+ <p class="note" id="hqGraphicEmpty" ${shown.length?'hidden':''}>No matching graphics. Choose another collection or clear your search.</p>
  ${hqAssetManagementUi()}
- <p class="note">Private scoring credentials are never stored as shared artwork. Scan-test printed QRs before distribution.</p></section>`;
+ <p class="note">The QR Composer inserts fresh, functional codes. Secure referee and court credentials are never saved as shared artwork.</p></section>`;
 }
 // Print Center QR Sign Composer. Reads shared art; never stores QR destinations or secrets.
 function hqQrComposerUi(){
- const artwork=[{id:'neutral',title:'Neutral Sovereign Sports design'},...HQ_GRAPHICS.filter(g=>hqAssetArtwork(g.id)).map(g=>({id:g.id,title:hqAssetById(g.id)?.title||g.title})),...hqAssetRows.filter(r=>!HQ_GRAPHICS.some(g=>g.id===r.id)).map(r=>({id:r.id,title:r.title}))];
+ const artwork=hqComposeArtworkChoices();
  const artOptions=artwork.map(g=>`<option value="${esc(g.id)}">${esc(g.title)}</option>`).join('');
  const secured=liveMode&&!!session&&cloudRole==='director';
  return `<section class="panel" id="hqQrComposer"><h2>Create QR Sign</h2><p class="note">Combines shared artwork with a fresh, machine-generated QR. The current event name is added automatically; original branded artwork may retain another event name.</p>
  <div class="grid">
  <label>QR destination<select id="hqComposeKind"><option value="captain">Captain's View</option><option value="display">Public Display</option><option value="custom">Registration / release form / HTTPS link</option>${secured?'<option value="court">Private court scoring (Director only)</option>':''}</select></label>
+ <label>Artwork collection<select id="hqComposeCollection"><option value="all">All collections</option>${Object.entries(HQ_ART_COLLECTIONS).map(([key,v])=>`<option value="${key}" ${hqComposeCollection===key?'selected':''}>${esc(v.label)}</option>`).join('')}</select></label>
  <label>Artwork / background<select id="hqComposeArtwork">${artOptions}</select></label>
  <label>Print layout<select id="hqComposeLayout"><option value="full">Full-page portrait</option><option value="half">Half-page portrait</option><option value="qr">QR-only sheet</option></select></label>
  <label>Sign heading<input id="hqComposeHeading" maxlength="70" placeholder="Optional · uses QR destination by default"></label>
@@ -3362,7 +3442,7 @@ function saveSetup(){
  setupDraft=null;notice='Setup saved. Next: save team names and officiating preferences, then Generate Schedule.';local();return true;
 }
 function dl(name,data,type='application/json'){let a=document.createElement('a'),u=URL.createObjectURL(new Blob([data],{type}));a.href=u;a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(u),1000)}
-function bind(){if($('hqReturnDirectorView'))$('hqReturnDirectorView').onclick=hqReturnToDirector;if($('hqEventSelector'))$('hqEventSelector').onchange=e=>{e.target.blur();hqInspectEvent(e.target.value)};if($('hqEventRefresh'))$('hqEventRefresh').onclick=()=>hqCatalogReload();if($('hqNewEvent'))$('hqNewEvent').onclick=hqNewEventDialog;if($('hqManageEvents'))$('hqManageEvents').onclick=hqManageEventDialog;if($('hqOpenResetManager'))$('hqOpenResetManager').onclick=hqManageEventDialog;if($('hqEventsRefresh'))$('hqEventsRefresh').onclick=()=>hqCatalogReload();if($('dxRefreshApprovals'))$('dxRefreshApprovals').onclick=()=>{if(hqViewingSelected())void hqRefreshSelectedPending();else void pollReports();};if($('hqReturnLegacy'))$('hqReturnLegacy').onclick=()=>hqInspectEvent('legacy');if($('hqScheduleSave'))$('hqScheduleSave').onclick=hqSaveSchedulePreview;if($('hqScheduleCancel'))$('hqScheduleCancel').onclick=hqDiscardSchedulePreview;document.querySelectorAll('[data-tr-link]').forEach(b=>b.onclick=async()=>{await rosterLoad();teamRegLink(b.dataset.trLink)});document.querySelectorAll('[data-tr-review]').forEach(b=>b.onclick=()=>teamRegReview(b.dataset.trReview));document.querySelectorAll('[data-roster-preview]').forEach(b=>b.onclick=()=>registrationRosterPreview(b.dataset.rosterPreview));document.querySelectorAll('[data-roster-import]').forEach(b=>b.onclick=async()=>{await rosterLoad();registrationRosterImport(b.dataset.rosterImport)});document.querySelectorAll('[data-tr-edit]').forEach(b=>b.onclick=()=>teamRegEdit(b.dataset.trEdit));if($('trRefresh'))$('trRefresh').onclick=teamRegLoad;if($('readinessRefresh'))$('readinessRefresh').onclick=async()=>{await Promise.all([teamRegLoad(),rosterLoad(),waiverLoad()]);render()};if($('readinessSaveMinimum'))$('readinessSaveMinimum').onclick=()=>{const n=Number($('readinessMinimum').value);if(!Number.isInteger(n)||n<1||n>30)return alert('Choose a minimum from 1 to 30 players.');S.settings.rosterMinimum=n;local();};document.querySelectorAll('[data-waiver-review]').forEach(b=>b.onclick=()=>waiverReviewForm(b.dataset.waiverReview));if($('waiverBatch'))$('waiverBatch').onclick=waiverBatchReview;if($('jfCommit'))$('jfCommit').onclick=jotformCommit;if($('jfClose'))$('jfClose').onclick=()=>{jfPreview={formId:'',rows:[],error:'',loading:false};render()};document.querySelectorAll('[data-jf-preview]').forEach(b=>b.onclick=()=>jotformPreview(Number(b.dataset.jfPreview)));if($('connectionAdd'))$('connectionAdd').onclick=()=>connectionModal();if($('connectionRefresh'))$('connectionRefresh').onclick=connectionLoad;document.querySelectorAll('[data-conn-edit]').forEach(b=>b.onclick=()=>connectionModal(Number(b.dataset.connEdit)));document.querySelectorAll('[data-conn-remove]').forEach(b=>b.onclick=()=>connectionRemove(Number(b.dataset.connRemove)));if($('rosterAdd'))$('rosterAdd').onclick=()=>rosterModal();if($('rosterReload'))$('rosterReload').onclick=async()=>{await rosterLoad();await waiverLoad()};if($('dirSearch')){const search=$('dirSearch');search.oninput=e=>{directoryQuery=e.target.value;updateDirectorySuggestions()};search.onkeydown=e=>{if(e.key==='Enter'){e.preventDefault();const first=$('dirSuggestions')?.querySelector('[data-dir-pick]');if(first)directoryPick(first.dataset.dirPick)}else if(e.key==='Escape'){directoryQuery='';search.value='';updateDirectorySuggestions()}};}if($('dirSuggestions'))$('dirSuggestions').onclick=e=>{const b=e.target.closest('[data-dir-pick]');if(b)directoryPick(b.dataset.dirPick)};if($('dirClearSelection'))$('dirClearSelection').onclick=()=>{directorySelectedId='';render();$('dirSearch')?.focus()};document.querySelectorAll('[data-dir-view]').forEach(b=>b.onclick=()=>{directoryView=b.dataset.dirView;render()});document.querySelectorAll('[data-roster-edit]').forEach(b=>b.onclick=()=>rosterModal(b.dataset.rosterEdit));document.querySelectorAll('[data-dir-assign]').forEach(b=>b.onclick=()=>directoryAssign(b.dataset.dirAssign));document.querySelectorAll('[data-dir-addteam]').forEach(b=>b.onclick=()=>directoryAssign('',b.dataset.dirAddteam));document.querySelectorAll('[data-dir-unassign]').forEach(b=>b.onclick=()=>directoryUnassign(b.dataset.dirUnassign));document.querySelectorAll('[data-dir-delete]').forEach(b=>b.onclick=()=>directoryDelete(b.dataset.dirDelete));if($('recoveryMatch'))$('recoveryMatch').onchange=e=>{recoverySelectedMatch=e.target.value;render()};if($('saveFormat'))$('saveFormat').onclick=saveFormat;document.querySelectorAll('[data-load-format]').forEach(b=>b.onclick=()=>loadFormat(b.dataset.loadFormat));document.querySelectorAll('[data-rename-format]').forEach(b=>b.onclick=()=>renameFormat(b.dataset.renameFormat));document.querySelectorAll('[data-delete-format]').forEach(b=>b.onclick=()=>deleteFormat(b.dataset.deleteFormat));if($('captainTeam'))$('captainTeam').onchange=e=>{localStorage.setItem(hqPublicTarget?'hq-captain-team:'+hqPublicTarget:'hc-v4-captain-team',e.target.value);e.target.blur();render()};document.querySelectorAll('[data-group]').forEach(b=>b.onclick=()=>{const g=DIRECTOR_GROUPS.find(x=>x.id===b.dataset.group);if(g){tab=g.start;render();if(tab==='rosters'){rosterLoad();waiverLoad()}if(tab==='connections'||tab==='registrations'){connectionLoad();waiverLoad();teamRegLoad();rosterLoad()}}});document.querySelectorAll('[data-tab]').forEach(b=>b.onclick=()=>{tab=b.dataset.tab;render();if(tab==='rosters'){rosterLoad();waiverLoad()}if(tab==='connections'||tab==='registrations'){connectionLoad();waiverLoad();teamRegLoad();rosterLoad()}});$('modeSelect').onchange=e=>{
+function bind(){if($('hqGraphicSearch')){$('hqGraphicSearch').oninput=e=>{hqGraphicSearch=e.target.value;hqGraphicsFilterCards();};hqGraphicsFilterCards();}if($('hqGraphicType'))$('hqGraphicType').onchange=e=>{hqGraphicType=e.target.value;render();hqGraphicJump();};if($('hqComposeCollection'))$('hqComposeCollection').onchange=e=>hqComposeSetCollection(e.target.value);if(hqComposeRequestedArt&&$('hqComposeArtwork'))hqComposeSetCollection(hqComposeCollection);if($('hqReturnDirectorView'))$('hqReturnDirectorView').onclick=hqReturnToDirector;if($('hqEventSelector'))$('hqEventSelector').onchange=e=>{e.target.blur();hqInspectEvent(e.target.value)};if($('hqEventRefresh'))$('hqEventRefresh').onclick=()=>hqCatalogReload();if($('hqNewEvent'))$('hqNewEvent').onclick=hqNewEventDialog;if($('hqManageEvents'))$('hqManageEvents').onclick=hqManageEventDialog;if($('hqOpenResetManager'))$('hqOpenResetManager').onclick=hqManageEventDialog;if($('hqEventsRefresh'))$('hqEventsRefresh').onclick=()=>hqCatalogReload();if($('dxRefreshApprovals'))$('dxRefreshApprovals').onclick=()=>{if(hqViewingSelected())void hqRefreshSelectedPending();else void pollReports();};if($('hqReturnLegacy'))$('hqReturnLegacy').onclick=()=>hqInspectEvent('legacy');if($('hqScheduleSave'))$('hqScheduleSave').onclick=hqSaveSchedulePreview;if($('hqScheduleCancel'))$('hqScheduleCancel').onclick=hqDiscardSchedulePreview;document.querySelectorAll('[data-tr-link]').forEach(b=>b.onclick=async()=>{await rosterLoad();teamRegLink(b.dataset.trLink)});document.querySelectorAll('[data-tr-review]').forEach(b=>b.onclick=()=>teamRegReview(b.dataset.trReview));document.querySelectorAll('[data-roster-preview]').forEach(b=>b.onclick=()=>registrationRosterPreview(b.dataset.rosterPreview));document.querySelectorAll('[data-roster-import]').forEach(b=>b.onclick=async()=>{await rosterLoad();registrationRosterImport(b.dataset.rosterImport)});document.querySelectorAll('[data-tr-edit]').forEach(b=>b.onclick=()=>teamRegEdit(b.dataset.trEdit));if($('trRefresh'))$('trRefresh').onclick=teamRegLoad;if($('readinessRefresh'))$('readinessRefresh').onclick=async()=>{await Promise.all([teamRegLoad(),rosterLoad(),waiverLoad()]);render()};if($('readinessSaveMinimum'))$('readinessSaveMinimum').onclick=()=>{const n=Number($('readinessMinimum').value);if(!Number.isInteger(n)||n<1||n>30)return alert('Choose a minimum from 1 to 30 players.');S.settings.rosterMinimum=n;local();};document.querySelectorAll('[data-waiver-review]').forEach(b=>b.onclick=()=>waiverReviewForm(b.dataset.waiverReview));if($('waiverBatch'))$('waiverBatch').onclick=waiverBatchReview;if($('jfCommit'))$('jfCommit').onclick=jotformCommit;if($('jfClose'))$('jfClose').onclick=()=>{jfPreview={formId:'',rows:[],error:'',loading:false};render()};document.querySelectorAll('[data-jf-preview]').forEach(b=>b.onclick=()=>jotformPreview(Number(b.dataset.jfPreview)));if($('connectionAdd'))$('connectionAdd').onclick=()=>connectionModal();if($('connectionRefresh'))$('connectionRefresh').onclick=connectionLoad;document.querySelectorAll('[data-conn-edit]').forEach(b=>b.onclick=()=>connectionModal(Number(b.dataset.connEdit)));document.querySelectorAll('[data-conn-remove]').forEach(b=>b.onclick=()=>connectionRemove(Number(b.dataset.connRemove)));if($('rosterAdd'))$('rosterAdd').onclick=()=>rosterModal();if($('rosterReload'))$('rosterReload').onclick=async()=>{await rosterLoad();await waiverLoad()};if($('dirSearch')){const search=$('dirSearch');search.oninput=e=>{directoryQuery=e.target.value;updateDirectorySuggestions()};search.onkeydown=e=>{if(e.key==='Enter'){e.preventDefault();const first=$('dirSuggestions')?.querySelector('[data-dir-pick]');if(first)directoryPick(first.dataset.dirPick)}else if(e.key==='Escape'){directoryQuery='';search.value='';updateDirectorySuggestions()}};}if($('dirSuggestions'))$('dirSuggestions').onclick=e=>{const b=e.target.closest('[data-dir-pick]');if(b)directoryPick(b.dataset.dirPick)};if($('dirClearSelection'))$('dirClearSelection').onclick=()=>{directorySelectedId='';render();$('dirSearch')?.focus()};document.querySelectorAll('[data-dir-view]').forEach(b=>b.onclick=()=>{directoryView=b.dataset.dirView;render()});document.querySelectorAll('[data-roster-edit]').forEach(b=>b.onclick=()=>rosterModal(b.dataset.rosterEdit));document.querySelectorAll('[data-dir-assign]').forEach(b=>b.onclick=()=>directoryAssign(b.dataset.dirAssign));document.querySelectorAll('[data-dir-addteam]').forEach(b=>b.onclick=()=>directoryAssign('',b.dataset.dirAddteam));document.querySelectorAll('[data-dir-unassign]').forEach(b=>b.onclick=()=>directoryUnassign(b.dataset.dirUnassign));document.querySelectorAll('[data-dir-delete]').forEach(b=>b.onclick=()=>directoryDelete(b.dataset.dirDelete));if($('recoveryMatch'))$('recoveryMatch').onchange=e=>{recoverySelectedMatch=e.target.value;render()};if($('saveFormat'))$('saveFormat').onclick=saveFormat;document.querySelectorAll('[data-load-format]').forEach(b=>b.onclick=()=>loadFormat(b.dataset.loadFormat));document.querySelectorAll('[data-rename-format]').forEach(b=>b.onclick=()=>renameFormat(b.dataset.renameFormat));document.querySelectorAll('[data-delete-format]').forEach(b=>b.onclick=()=>deleteFormat(b.dataset.deleteFormat));if($('captainTeam'))$('captainTeam').onchange=e=>{localStorage.setItem(hqPublicTarget?'hq-captain-team:'+hqPublicTarget:'hc-v4-captain-team',e.target.value);e.target.blur();render()};document.querySelectorAll('[data-group]').forEach(b=>b.onclick=()=>{const g=DIRECTOR_GROUPS.find(x=>x.id===b.dataset.group);if(g){tab=g.start;render();if(tab==='rosters'){rosterLoad();waiverLoad()}if(tab==='connections'||tab==='registrations'){connectionLoad();waiverLoad();teamRegLoad();rosterLoad()}}});document.querySelectorAll('[data-tab]').forEach(b=>b.onclick=()=>{tab=b.dataset.tab;render();if(tab==='rosters'){rosterLoad();waiverLoad()}if(tab==='connections'||tab==='registrations'){connectionLoad();waiverLoad();teamRegLoad();rosterLoad()}});$('modeSelect').onchange=e=>{
  const desired=e.target.value;
  if(hqPublicTarget && (mode==='captain'||mode==='display')){
    if(desired==='director'){void hqReturnToDirector();return;}
@@ -3573,7 +3653,7 @@ document.addEventListener('click',e=>{
 // Shared print action dispatcher: one delegated listener survives view re-renders.
 // Capture keeps printing available if an unrelated binding fails.
 document.addEventListener('click',function printActions(e){
- const b=e.target.closest('[data-compose-print],[data-print],[data-doc],[data-courtprint],[data-publicqr],[data-graphic],[data-graphic-private],[data-asset-upload],[data-asset-remove],[data-asset-refresh]');
+ const b=e.target.closest('[data-compose-print],[data-print],[data-doc],[data-courtprint],[data-publicqr],[data-graphic],[data-graphic-private],[data-asset-upload],[data-asset-remove],[data-asset-refresh],[data-graphics-collection],[data-graphic-compose]');
  if(!b)return;
  if(b.disabled)return;
  e.preventDefault();e.stopImmediatePropagation();
@@ -3582,6 +3662,8 @@ document.addEventListener('click',function printActions(e){
  try{
   if(b.hasAttribute('data-compose-print')){hqComposeQrPrint();return;}
   if(b.hasAttribute('data-asset-refresh')){void hqAssetsLoad(true);return;}
+  if(b.hasAttribute('data-graphics-collection')){hqGraphicCollection=b.getAttribute('data-graphics-collection')||'all';hqGraphicType='all';hqGraphicSearch='';render();hqGraphicJump();return;}
+  if(b.hasAttribute('data-graphic-compose')){const id=b.getAttribute('data-graphic-compose');const meta=hqGraphicMeta(hqGraphicsAll().find(g=>g.id===id)||{id,title:''});hqComposeCollection=meta.collection;hqComposeRequestedArt=id;render();hqComposeSetCollection(meta.collection);requestAnimationFrame(()=>document.getElementById('hqQrComposer')?.scrollIntoView({block:'start'}));return;}
   if(b.hasAttribute('data-asset-upload')){void hqAssetUpload();return;}
   if(b.hasAttribute('data-asset-remove')){void hqAssetRemove(b.getAttribute('data-asset-remove'));return;}
   if(b.hasAttribute('data-graphic')){hqPrintSharedGraphic(b.getAttribute('data-graphic'));return;}
