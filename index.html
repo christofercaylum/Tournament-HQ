@@ -2845,8 +2845,12 @@ function hqGraphicMeta(g){
  return {collection,type};
 }
 function hqGraphicsAll(){
- const base=HQ_GRAPHICS.map(g=>hqAssetById(g.id)?{...g,kind:'art'}:g);
- const extras=hqAssetRows.filter(r=>!HQ_GRAPHICS.some(g=>g.id===r.id)).map(r=>({id:r.id,kind:'art',title:r.title,subtitle:'Shared uploaded artwork'}));
+ // Omit obsolete empty stock placeholders. If a Director previously uploaded
+ // to one of these IDs, retain the real asset and its existing cloud mapping.
+ const base=HQ_GRAPHICS.filter(g=>g.kind!=='placeholder'||!!hqAssetById(g.id))
+  .map(g=>hqAssetById(g.id)?{...g,kind:'art'}:g);
+ const extras=hqAssetRows.filter(r=>!HQ_GRAPHICS.some(g=>g.id===r.id))
+  .map(r=>({id:r.id,kind:'art',title:r.title,subtitle:'Shared uploaded artwork'}));
  return base.concat(extras);
 }
 function hqGraphicJump(){requestAnimationFrame(()=>document.getElementById('hqSharedGraphics')?.scrollIntoView({block:'start'}));}
@@ -2988,7 +2992,7 @@ async function hqAssetRemove(id){
 }
 function hqAssetManagementUi(){
  if(!hqAssetDirector())return '<p class="note">Sign in as Director to upload or replace graphics.</p>';
- const slots=hqGraphicsAll().filter(g=>g.kind==='placeholder'||g.kind==='art').map(g=>`<option value="${esc(g.id)}">Replace: ${esc(hqAssetById(g.id)?.title||g.title)}</option>`).join('');
+ const slots=hqGraphicsAll().filter(g=>g.kind==='art').map(g=>`<option value="${esc(g.id)}">Replace: ${esc(hqAssetById(g.id)?.title||g.title)}</option>`).join('');
  const collections=Object.entries(HQ_ART_COLLECTIONS).map(([key,v])=>`<option value="${key}" ${(hqGraphicCollection===key||hqGraphicCollection==='all'&&key==='neutral')?'selected':''}>${esc(v.label)}</option>`).join('');
  const types=Object.entries(HQ_ART_TYPES).map(([key,v])=>`<option value="${key}" ${key==='other'?'selected':''}>${esc(v)}</option>`).join('');
  return `<details id="hqManageArtwork"><summary style="cursor:pointer;font-weight:750;padding:10px 0">Upload / Replace Artwork · Director</summary>
@@ -3019,7 +3023,7 @@ function hqSharedGraphicLibrary(){
   const action=(g.kind==='placeholder'||g.kind==='art')&&!url?'<span class="mini">Placeholder · upload artwork to use</span>':
    g.kind==='private'?'<button class="btn primary" data-graphic-private="1">Choose Court & Print</button>':
    `<button class="btn primary" data-graphic="${esc(g.id)}">Preview / Print</button>`;
-  const compose=url?`<button class="btn" data-graphic-compose="${esc(g.id)}">Use in QR Sign</button>`:'';
+  const compose=url&&(meta.type==='qr'||meta.type==='other')?`<button class="btn" data-graphic-compose="${esc(g.id)}">Use in QR Sign</button>`:'';
   const remove=uploaded&&hqAssetDirector()?`<button class="btn" data-asset-remove="${esc(g.id)}">Remove Cloud Artwork</button>`:'';
   return `<div class="tile hq-graphic-card" data-graphic-card="1" data-search="${esc((uploaded?.title||g.title)+' '+HQ_ART_COLLECTIONS[meta.collection].label+' '+HQ_ART_TYPES[meta.type])}">${art}
   <h3>${esc(uploaded?.title||g.title)}</h3><p class="note">${esc(HQ_ART_TYPES[meta.type])} · ${esc(uploaded?'Uploaded shared artwork':g.subtitle||'Reusable template')}</p>
@@ -3043,7 +3047,7 @@ function hqQrComposerUi(){
  const artwork=hqComposeArtworkChoices();
  const artOptions=artwork.map(g=>`<option value="${esc(g.id)}">${esc(g.title)}</option>`).join('');
  const secured=liveMode&&!!session&&cloudRole==='director';
- return `<section class="panel" id="hqQrComposer"><h2>Create QR Sign</h2><p class="note">Combines shared artwork with a fresh, machine-generated QR. The current event name is added automatically; original branded artwork may retain another event name.</p>
+ return `<section class="panel" id="hqQrComposer"><h2>Create QR Sign</h2><p class="note">Choose a QR Background for a full-page branded sign. The QR is generated live; artwork already containing chapter branding is not repeated.</p>
  <div class="grid">
  <label>QR destination<select id="hqComposeKind"><option value="captain">Captain's View</option><option value="display">Public Display</option><option value="custom">Registration / release form / HTTPS link</option>${secured?'<option value="court">Private court scoring (Director only)</option>':''}</select></label>
  <label>Artwork collection<select id="hqComposeCollection"><option value="all">All collections</option>${Object.entries(HQ_ART_COLLECTIONS).map(([key,v])=>`<option value="${key}" ${hqComposeCollection===key?'selected':''}>${esc(v.label)}</option>`).join('')}</select></label>
@@ -3080,13 +3084,25 @@ function hqComposeQrPrint(){
  const image=artId!=='neutral'?hqAssetArtwork(artId):'';
  if(artId!=='neutral'&&!image)throw Error('Selected artwork is unavailable. Choose neutral or refresh the library.');
  const selected=HQ_GRAPHICS.find(x=>x.id===artId)||hqAssetById(artId);
- if(image&&/harvest crown/i.test(selected?.title||'')&&!/harvest crown/i.test(S.title)){
-  if(!confirm('This artwork may contain Harvest Crown wording that does not change. Print for '+S.title+' anyway?'))return;
+ if(image){
+  const artCollection=hqGraphicMeta(selected||{id:artId,title:''}).collection;
+  const eventCollection=hqGraphicMeta({id:'',title:S.title}).collection;
+  if(artCollection!=='neutral'&&artCollection!=='other'&&eventCollection!==artCollection){
+   if(!confirm('This artwork belongs to '+(HQ_ART_COLLECTIONS[artCollection]?.label||'another collection')+
+     ', but your selected tournament is '+S.title+'. The artwork text will not change. Continue?'))return;
+  }
  }
  const secure=kind==='court',style=layout==='full'?'full':layout==='half'?'half':'qr-only';
- const artwork=image&&style!=='qr-only'?`<img class="hq-compose-art" src="${esc(image)}" alt="Shared event artwork">`:'';
+ const artBackground=!!image&&style!=='qr-only';
+ // Uploaded QR artwork is the sign itself, NOT a tiny thumbnail above a
+ // second sign. The overlay is reserved for a live generated QR and its
+ // actionable label; the artwork already contains event/chapter branding.
+ const artwork=artBackground?`<img class="hq-compose-art" src="${esc(image)}" alt="Shared event artwork">`:'';
  const detail=secure?'AUTHORIZED OFFICIALS ONLY · KEEP THIS QR PRIVATE':kind==='captain'?'TEAM SCHEDULES · DUTIES · BRACKET':kind==='display'?'SCHEDULE · STANDINGS · LIVE BRACKET':'SCAN TO OPEN THE LINK';
- const html=`<section class="hq-composed ${style}"><div class="hq-compose-shell"><div class="hq-compose-brand">♛ SOVEREIGN SPORTS ♛</div>${artwork}<h1>${esc(S.title)}</h1><h2>${esc(heading)}</h2><div class="hq-compose-qr-pad"><div id="qr-target" class="qr"></div></div><p class="hq-compose-detail">${esc(detail)}</p>${!secure?`<p class="hq-compose-address">${esc(url)}</p>`:''}<p class="hq-compose-foot">${secure?'KEEP WITH OFFICIAL COURT MATERIALS':'SCAN WITH YOUR PHONE CAMERA'}</p></div></section>`;
+ const qrPanel=`<h2>${esc(heading)}</h2><div class="hq-compose-qr-pad"><div id="qr-target" class="qr"></div></div><p class="hq-compose-detail">${esc(detail)}</p><p class="hq-compose-foot">${secure?'KEEP WITH OFFICIAL COURT MATERIALS':'SCAN WITH YOUR PHONE CAMERA'}</p>`;
+ const html=artBackground?
+  `<section class="hq-composed ${style} artwork"><div class="hq-compose-shell">${artwork}<div class="hq-compose-overlay">${qrPanel}</div></div></section>`:
+  `<section class="hq-composed ${style}"><div class="hq-compose-shell"><div class="hq-compose-brand">♛ SOVEREIGN SPORTS ♛</div><h1>${esc(S.title)}</h1>${qrPanel}</div></section>`;
  openPrint(html,url);
 }
 function hqGraphicPrintHtml(g,qrText){
@@ -3271,9 +3287,60 @@ const hqSingleSignPrintCss=`
  body > section.hq-art-print img { display:block!important; max-width:100%!important; max-height:100%!important; object-fit:contain!important; }
  @media print { body > section.hq-composed, body > section.hq-sign, body > section.hq-art-print { margin:0!important; } }
 `;
+// Artwork is the whole printed sign, while the QR remains freshly generated.
+// Letter-sized, with all content clipped to one print page (including Safari).
+const hqArtworkComposeCss=`
+ body > section.hq-composed.artwork { width:215.9mm!important; max-width:215.9mm!important;
+   height:273mm!important; min-height:0!important; max-height:273mm!important;
+   margin:0 auto!important; padding:0!important; background:#102443!important; overflow:hidden!important; }
+ body > section.hq-composed.artwork .hq-compose-shell { position:relative!important;
+   width:100%!important; height:100%!important; max-height:none!important;
+   padding:0!important; border:0!important; background:transparent!important; overflow:hidden!important; }
+ body > section.hq-composed.artwork .hq-compose-art { position:absolute!important;
+   inset:0!important; width:100%!important; height:100%!important;
+   max-width:none!important; max-height:none!important; margin:0!important;
+   object-fit:cover!important; border:0!important; border-radius:0!important; }
+ body > section.hq-composed.artwork .hq-compose-overlay { position:absolute!important;
+   z-index:1!important; top:57%!important; left:50%!important;
+   transform:translate(-50%,-50%)!important;
+   display:flex!important; flex-direction:column!important; align-items:center!important;
+   justify-content:center!important; box-sizing:border-box!important;
+   width:76%!important; padding:3mm!important;
+   background:transparent!important; }
+ body > section.hq-composed.artwork .hq-compose-overlay h2 {
+   margin:1mm 0 3mm!important; padding:1.5mm 4mm!important;
+   color:#fff!important; background:#102443!important; border:1px solid #d7b66e!important;
+   font-family:Arial,sans-serif!important; font-size:15pt!important; line-height:1.12!important;
+   letter-spacing:.02em!important; text-transform:uppercase!important; }
+ body > section.hq-composed.artwork .hq-compose-qr-pad {
+   display:flex!important; align-items:center!important; justify-content:center!important;
+   width:65mm!important; height:65mm!important; box-sizing:border-box!important;
+   padding:4mm!important; margin:0 auto!important; background:white!important;
+   border:1px solid #d7b66e!important; }
+ body > section.hq-composed.artwork .hq-compose-qr-pad .qr {
+   width:57mm!important; height:57mm!important; margin:0!important; }
+ body > section.hq-composed.artwork .hq-compose-qr-pad .qr > img,
+ body > section.hq-composed.artwork .hq-compose-qr-pad .qr > canvas {
+   display:block!important; width:100%!important; height:100%!important; }
+ body > section.hq-composed.artwork .hq-compose-detail,
+ body > section.hq-composed.artwork .hq-compose-foot {
+   color:#fff!important; background:#102443!important;
+   padding:1mm 3mm!important; margin:2mm auto 0!important;
+   font-size:9pt!important; line-height:1.1!important; font-weight:800!important;
+   max-width:100%!important; }
+ body > section.hq-composed.artwork.half { width:105mm!important; max-width:105mm!important;
+   height:135mm!important; max-height:135mm!important; }
+ body > section.hq-composed.artwork.half .hq-compose-overlay { top:58%!important; width:86%!important; padding:1mm!important; }
+ body > section.hq-composed.artwork.half .hq-compose-overlay h2 { font-size:9pt!important; margin:0 0 1mm!important; }
+ body > section.hq-composed.artwork.half .hq-compose-qr-pad { width:32mm!important; height:32mm!important; padding:2mm!important; }
+ body > section.hq-composed.artwork.half .hq-compose-qr-pad .qr { width:28mm!important; height:28mm!important; }
+ body > section.hq-composed.artwork.half .hq-compose-detail,
+ body > section.hq-composed.artwork.half .hq-compose-foot { font-size:6pt!important; margin:1mm auto 0!important; }
+ @media print { body > section.hq-composed.artwork { margin:0 auto!important; } }
+`;
 function htmlDoc(content){
  const sign=/^<section class="(?:hq-composed|hq-sign|hq-art-print)(?:\s|")/.test(content.trim());
- return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Sovereign Sports · ${esc(S.title)}</title><style>${docCss}${sign?hqSingleSignPrintCss:''}</style></head><body>${content}</body></html>`;
+ return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Sovereign Sports · ${esc(S.title)}</title><style>${docCss}${sign?hqSingleSignPrintCss:''}${sign?hqArtworkComposeCss:''}</style></head><body>${content}</body></html>`;
 }
 function openPrint(html,qr){
  // Keep print preview inside the app: no pop-up permissions or automatic print dialogs.
