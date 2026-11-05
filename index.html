@@ -2877,6 +2877,40 @@ function hqGraphicsFilterCards(){
 // Shared artwork metadata lives in hq_graphic_assets, outside every tournament.
 // Only approved, non-sensitive images are uploaded to the public artwork bucket.
 const HQ_ASSET_BUCKET='hq-shared-graphics';
+// Keep the Director's artwork form intact across cloud-driven Print Center redraws.
+// In particular, native file inputs cannot be repopulated from a filename string.
+let hqArtworkPickerActive=false;
+function hqArtworkFormSnapshot(){
+ const form=document.getElementById('hqManageArtwork');
+ if(!form||tab!=='prints')return null;
+ const field=id=>form.querySelector('#'+id);
+ return {open:form.open, title:field('hqAssetTitle')?.value||'', slot:field('hqAssetSlot')?.value||'new',
+  collection:field('hqAssetCollection')?.value||'neutral', type:field('hqAssetType')?.value||'other',
+  file:field('hqAssetFile')||null};
+}
+function hqArtworkFormRestore(saved){
+ if(!saved)return;
+ const form=document.getElementById('hqManageArtwork');if(!form)return;
+ form.open=saved.open;
+ for(const [id,value] of [['hqAssetTitle',saved.title],['hqAssetSlot',saved.slot],
+    ['hqAssetCollection',saved.collection],['hqAssetType',saved.type]]){
+  const el=form.querySelector('#'+id);
+  if(el && (id==='hqAssetTitle' || Array.from(el.options||[]).some(o=>o.value===value)))el.value=value;
+ }
+ // Reattach the *original* file input, retaining the selected File object.
+ const fresh=form.querySelector('#hqAssetFile');
+ if(fresh&&saved.file&&fresh!==saved.file)fresh.replaceWith(saved.file);
+}
+// Safari may temporarily blur file inputs while its native image picker is open.
+// Do not replace the DOM during that window.
+document.addEventListener('click',e=>{if(e.target?.id==='hqAssetFile')hqArtworkPickerActive=true;},true);
+for(const type of ['change','cancel'])document.addEventListener(type,e=>{
+ if(e.target?.id==='hqAssetFile')hqArtworkPickerActive=false;
+},true);
+window.addEventListener('focus',()=>{if(hqArtworkPickerActive)requestAnimationFrame(()=>{
+ // Older browsers may not emit cancel when the picker is dismissed.
+ if(document.activeElement?.id!=='hqAssetFile')hqArtworkPickerActive=false;
+});});
 let hqAssetRows=[],hqAssetLoaded=false,hqAssetLoading=false,hqAssetBusy=false,hqAssetError='';
 const hqAssetDirector=()=>!!client&&!!session&&liveMode&&cloudRole==='director'&&mode==='director';
 function hqAssetUrl(row){
@@ -2897,6 +2931,8 @@ async function hqAssetsLoad(force=false){
  finally{hqAssetLoading=false;if(tab==='prints'||tab==='sponsors')render();}
 }
 async function hqAssetUpload(){
+ hqArtworkPickerActive=false;
+ let savedSuccessfully=false;
  if(!hqAssetDirector()||hqAssetBusy){alert('Sign in as Director to upload shared artwork.');return;}
  const file=document.getElementById('hqAssetFile')?.files?.[0];
  const title=(document.getElementById('hqAssetTitle')?.value||'').trim();
@@ -2922,9 +2958,19 @@ async function hqAssetUpload(){
   await hqAssetsLoad(true);
   // Removing old artwork is best-effort; metadata already points to the new file.
   if(old?.object_path && old.object_path!==path)void client.storage.from(HQ_ASSET_BUCKET).remove([old.object_path]);
+  savedSuccessfully=true;
   alert('Shared artwork saved. It is now available for every tournament.');
  }catch(e){alert('Artwork was NOT saved: '+(e?.message||String(e)));}
- finally{hqAssetBusy=false;render();}
+ finally{
+  hqAssetBusy=false;
+  if(savedSuccessfully){
+   const form=document.getElementById('hqManageArtwork');
+   const titleInput=form?.querySelector('#hqAssetTitle'),fileInput=form?.querySelector('#hqAssetFile');
+   if(titleInput)titleInput.value='';
+   if(fileInput)fileInput.value='';
+  }
+  render();
+ }
 }
 async function hqAssetRemove(id){
  if(!hqAssetDirector()||hqAssetBusy)return;
@@ -3261,6 +3307,8 @@ function printDoc(kind){openPrint(docSections(kind))}
 function docDownload(kind){dl('Sovereign-Sports-'+kind+'.doc',htmlDoc(docSections(kind)),'application/msword')}
 function printCourt(c){const secret=hqCourtCached(c);if(!secret){alert('Create the secure court QR first.');return}openPrint(courtDoc(c),courtUrl(c,secret))}
 function render(){
+if(hqArtworkPickerActive&&tab==='prints')return;
+const hqArtworkDraft=hqArtworkFormSnapshot();
 S.sponsors??=[];S.formats??=[];S.sponsorDisplay??='strip';S.settings.bracketOfficialMode??='dedicated';S.settings.bracketLineMode??='active';
 // Never replace an input node during background refresh. Reconstructing and
 // re-focusing a field interrupts native keyboard input (especially on Safari).
@@ -3274,7 +3322,7 @@ if(focused && focused.closest && focused.closest('#root') &&
 // across automatic cloud refreshes and user-triggered re-renders.
 const oldNav=document.querySelector('#root .tabs');
 const oldNavScroll=oldNav?oldNav.scrollLeft:0;
-document.title='Sovereign Sports Tournament HQ · '+S.title;const pages={home,events:dxEvents,prepare:dxPrepare,schedulework:dxSchedule,runwork:dxRun,approvals:dxApprovals,resultswork:dxResults,participants:dxParticipants,assignments:assignmentsPage,quick:quickFixPage,matches:matchesPage,standings:standingsPage,bracket:bracketPage,setup,formats:formatsPage,safety,cloud:cloudPage,prints:reportCenter,sponsors:sponsorPage,rosters:rosterPage,registrations:registrationManagementPage,connections:connectionPage,submit:reportView,reports:reportHistory,schedule:captainPage,display:displayPage};$('root').innerHTML=header()+`<main class="shell">${hqPreviewPanel()}${hqPublicTarget&&hqPublicError?'<div class="notice bad">'+esc(hqPublicError)+'</div>':''}${hqPublicTarget&&!hqPublicLoaded?'<div class="notice">Public tournament information is not yet available. No other event data will be shown.</div>':''}${liveMode&&mode==='director'&&cloudRole==='viewer'?'<div class="notice bad">Director controls are locked. Sign in with an authorized director account under Cloud & Backups.</div>':''}${mode!=='display'&&!hqViewingSelected()&&liveMode&&lastSyncAt&&Date.now()-lastSyncAt>25000?'<div class="notice bad">Cloud updates delayed — check connection before relying on these results.</div>':''}${notice && mode!=='display'?`<div class="notice">${esc(notice)}</div>`:''}${uxPageLinks()}${uxDiagnostics()}${liveMode&&mode==='director'&&cloudRole==='viewer'&&tab!=='cloud'?'<div class="panel"><p class="note">Sign in on the Cloud page to unlock live director controls. Your practice data is not deleted.</p><button class="btn primary" data-tab="cloud">Open Cloud Sign-In</button></div>':liveMode&&mode==='director'&&cloudRole==='assistant'?(tab==='cloud'?cloudPage():`<div class="panel"><h2>Assistant Director</h2><p class="note">Review scores while the director plays. Tournament setup and manual score edits are director-only.</p></div>${reportQueue()}`):(pages[tab]||home)()}</main>`;restoreSetupDraft();bind();hqLockSelectedControls();
+document.title='Sovereign Sports Tournament HQ · '+S.title;const pages={home,events:dxEvents,prepare:dxPrepare,schedulework:dxSchedule,runwork:dxRun,approvals:dxApprovals,resultswork:dxResults,participants:dxParticipants,assignments:assignmentsPage,quick:quickFixPage,matches:matchesPage,standings:standingsPage,bracket:bracketPage,setup,formats:formatsPage,safety,cloud:cloudPage,prints:reportCenter,sponsors:sponsorPage,rosters:rosterPage,registrations:registrationManagementPage,connections:connectionPage,submit:reportView,reports:reportHistory,schedule:captainPage,display:displayPage};$('root').innerHTML=header()+`<main class="shell">${hqPreviewPanel()}${hqPublicTarget&&hqPublicError?'<div class="notice bad">'+esc(hqPublicError)+'</div>':''}${hqPublicTarget&&!hqPublicLoaded?'<div class="notice">Public tournament information is not yet available. No other event data will be shown.</div>':''}${liveMode&&mode==='director'&&cloudRole==='viewer'?'<div class="notice bad">Director controls are locked. Sign in with an authorized director account under Cloud & Backups.</div>':''}${mode!=='display'&&!hqViewingSelected()&&liveMode&&lastSyncAt&&Date.now()-lastSyncAt>25000?'<div class="notice bad">Cloud updates delayed — check connection before relying on these results.</div>':''}${notice && mode!=='display'?`<div class="notice">${esc(notice)}</div>`:''}${uxPageLinks()}${uxDiagnostics()}${liveMode&&mode==='director'&&cloudRole==='viewer'&&tab!=='cloud'?'<div class="panel"><p class="note">Sign in on the Cloud page to unlock live director controls. Your practice data is not deleted.</p><button class="btn primary" data-tab="cloud">Open Cloud Sign-In</button></div>':liveMode&&mode==='director'&&cloudRole==='assistant'?(tab==='cloud'?cloudPage():`<div class="panel"><h2>Assistant Director</h2><p class="note">Review scores while the director plays. Tournament setup and manual score edits are director-only.</p></div>${reportQueue()}`):(pages[tab]||home)()}</main>`;restoreSetupDraft();hqArtworkFormRestore(hqArtworkDraft);bind();hqLockSelectedControls();
 if(tab==='prints'&&!hqAssetLoaded&&!hqAssetLoading&&client&&liveMode)void hqAssetsLoad();
 const newNav=document.querySelector('#root .tabs');
 if(newNav)newNav.scrollLeft=oldNavScroll;
