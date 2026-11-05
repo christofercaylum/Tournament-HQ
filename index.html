@@ -3321,7 +3321,11 @@ const hqArtworkComposeCss=`
    width:57mm!important; height:57mm!important; margin:0!important; }
  body > section.hq-composed.artwork .hq-compose-qr-pad .qr > img,
  body > section.hq-composed.artwork .hq-compose-qr-pad .qr > canvas {
-   display:block!important; width:100%!important; height:100%!important; }
+   width:100%!important; height:100%!important; }
+ /* qrcodejs creates both a hidden canvas and a visible img. Never display
+    the canvas as a second QR below the image. Preserve canvas-only fallback. */
+ body > section.hq-composed.artwork .hq-compose-qr-pad .qr > img { display:block!important; }
+ body > section.hq-composed.artwork .hq-compose-qr-pad .qr:has(> img) > canvas { display:none!important; }
  body > section.hq-composed.artwork .hq-compose-detail,
  body > section.hq-composed.artwork .hq-compose-foot {
    color:#fff!important; background:#102443!important;
